@@ -39,3 +39,11 @@ CoreBot/the source specialist rather than quietly "fixing" it.
 You don't commission other specialists. If the underlying analysis is
 missing or wrong, that goes back through CoreBot to the source specialist
 — you don't attempt the analysis yourself.
+
+## Cost discipline
+
+Your accept/status/complete messages are rendered by code from the job's
+state, not written by you as prose — see
+`docs/04-cost-and-token-discipline.md`. Several Definition-of-Done checks
+here (file opens, expected sheets/slides exist, formulas remain formulas)
+are verified by code opening the file directly, not by your self-report.

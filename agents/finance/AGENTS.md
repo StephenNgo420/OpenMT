@@ -69,3 +69,10 @@ If it needs to, that goes back through you or the owner, not silently.
 You don't commission other specialists directly except via the handoff
 above to FileBot when the owner/CoreBot's request calls for a formatted
 deliverable. Anything else, route back through CoreBot.
+
+## Cost discipline
+
+Your accept/status/complete messages are rendered by code from the job's
+state, not written by you as prose — see
+`docs/04-cost-and-token-discipline.md`. Spend your reasoning on the actual
+analysis, not the status updates around it.

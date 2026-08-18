@@ -42,7 +42,16 @@
     entries: {
       core: {
         model: {
+          // Default/DIRECT_SPECIALIST + FALLBACK_EXECUTOR tier: full model.
           primary: "openai:gpt-4.1", // ChatGPT family, per roster
+          // ROUTER tier: intent classification + structured task-packet
+          // writing is closer to formatting than deep reasoning, so it
+          // runs on a cheaper model in the same family. See
+          // docs/04-cost-and-token-discipline.md for the reasoning.
+          // TODO(stage 3): confirm the current cheap-tier OpenAI model id
+          // when we wire real keys, rather than hardcoding one that may
+          // be stale by then.
+          router: "openai:<cheap-tier-todo>",
         },
         workspace: "~/.openclaw/agents/core/workspace",
         subagents: {
@@ -50,6 +59,10 @@
           allowAgents: ["finance", "picture", "coding", "file", "marketing", "research"],
           delegationMode: "prefer", // push non-trivial work through sessions_spawn rather than answering directly
         },
+        // Static system-prompt content (SOUL.md + AGENTS.md) should be
+        // marked cacheable once we wire this up in Stage 4, so repeat
+        // calls in the same session don't re-bill the full input tokens
+        // for personas that never change mid-session.
       },
 
       finance: {

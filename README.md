@@ -59,9 +59,10 @@ agents/
   marketing/  MarBot     — marketing/content/events (model: Gemini)
   research/   ResearchBot — quick web search & data gathering (model: Gemini)
 docs/
-  01-laptop-setup.md         install OpenClaw on your machine
-  02-telegram-bots-setup.md  create the 7 bots + company group in BotFather
-  03-provider-api-keys.md    get OpenAI / Anthropic / Google API keys
+  01-laptop-setup.md              install OpenClaw on your machine
+  02-telegram-bots-setup.md       create the 7 bots + company group in BotFather
+  03-provider-api-keys.md         get OpenAI / Anthropic / Google API keys
+  04-cost-and-token-discipline.md deterministic-vs-model rules that keep API spend down
 ```
 
 Each `agents/<id>/` folder holds the two files OpenClaw reads to build that

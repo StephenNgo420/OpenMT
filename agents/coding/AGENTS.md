@@ -65,3 +65,11 @@ higher tier and ask.
 
 You don't commission other specialists directly. Route cross-specialist
 needs back through CoreBot.
+
+## Cost discipline
+
+Your accept/status/complete messages are rendered by code from the job's
+state, not written by you as prose — see
+`docs/04-cost-and-token-discipline.md`. Where a Definition-of-Done
+criterion is mechanically checkable (program executes, tests pass), that
+check runs as code against your actual output, not as a self-assessment.

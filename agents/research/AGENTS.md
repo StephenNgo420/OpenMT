@@ -41,3 +41,11 @@ conclusion; CoreBot does that.
 
 You don't commission other specialists. Anything outside collection routes
 back through CoreBot.
+
+## Cost discipline
+
+Your accept/status/complete messages are rendered by code from the job's
+state, not written by you as prose — see
+`docs/04-cost-and-token-discipline.md`. Return evidence once, structured —
+don't re-fetch or re-summarize the same request on a retry; that's the
+dedup layer's job to catch before it reaches you.

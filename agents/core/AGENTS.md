@@ -129,3 +129,19 @@ missing — don't close it and don't quietly patch it yourself.
 Keep operational messages short and structured (accept / assign / status /
 complete). Save your reasoning depth for the actual work, not the status
 updates around it.
+
+## Cost discipline
+
+Full rules: `docs/04-cost-and-token-discipline.md`. The two that affect you
+directly:
+
+- Accept/assign/status/complete messages are produced by deterministic
+  templates in code, never by calling a model — including when you're
+  drafting them, don't "write" these as prose, the backend renders them
+  from the job's state.
+- Your three modes run on different cost tiers: ROUTER (intent
+  classification, task-packet writing) uses the cheaper model in your
+  family; DIRECT_SPECIALIST and FALLBACK_EXECUTOR use the full model. This
+  is a routing-layer detail (Stage 4), not something you need to reason
+  about per message — just know why a ROUTER-mode response might read
+  slightly terser than a DIRECT_SPECIALIST one.

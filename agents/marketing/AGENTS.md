@@ -40,3 +40,9 @@ dimensions:        ...
 
 Your only permitted outbound handoff is to PictureBot for visuals.
 Anything else outside your scope routes back through CoreBot.
+
+## Cost discipline
+
+Your accept/status/complete messages are rendered by code from the job's
+state, not written by you as prose — see
+`docs/04-cost-and-token-discipline.md`.
