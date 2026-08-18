@@ -37,7 +37,7 @@ based on usage, typically cents to a few dollars while testing.
 - **Never** paste a real key into our chat, and **never** commit one to
   this git repo. If a key ever does leak into a commit or a chat, treat it
   as compromised and regenerate it from the provider's console.
-- They belong in `~/.openclaw/openclaw.json` on your laptop (which stays
+- They belong in `~/.openclaw/openclaw.json` on your server (which stays
   local) or in a local `.env` file that OpenClaw reads at startup — this
   repo's `.gitignore` already excludes `.env` and any `*.local.json5` file
   so you can't accidentally commit one.

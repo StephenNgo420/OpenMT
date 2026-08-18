@@ -95,5 +95,5 @@ For now, skip this — it's not needed until Stage 3.
 
 Once done, just confirm "bots created" — **do not paste the actual tokens
 into our chat.** When we get to Stage 3 (wiring the real config), I'll tell
-you exactly which file to paste them into on your own laptop, which stays
+you exactly which file to paste them into on your own server, which stays
 local and out of git.

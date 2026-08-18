@@ -19,7 +19,7 @@
 //
 // VERSION NOTE: this template uses the `agents.entries.<id>` shape
 // documented for current OpenClaw releases. Before merging this on your
-// laptop, run `openclaw --version` and `openclaw config get agents` and
+// server, run `openclaw --version` and `openclaw config get agents` and
 // tell me what comes back — if your installed version uses a different
 // key name (some docs show `agents.list`), we'll adjust this file to match
 // rather than assuming.
