@@ -41,7 +41,7 @@ Important, because it's easy to get confused:
 | 1 | Environment audit | ✅ done |
 | 2 | Seven-agent architecture (config-as-code) | ✅ done |
 | 3 | Bind each agent to its own Discord bot | ✅ done — all 7 bots created, wired, and confirmed responding live in Discord. Three non-obvious fixes were needed along the way (Discord plugin trust, `group:messaging` tool grant, per-account guild registration) — see the "Gotchas" section in `docs/02-discord-bots-setup.md` and `config/openclaw.config.template.json5`. |
-| 4 | CoreBot routing (direct vs. delegate) | 🟡 in progress — CoreBot now delegates via OpenClaw's native `sessions_spawn` sub-agent mechanism: `agents.defaults.subagents.requireAgentId=true` plus a per-agent `allowAgents` list enforces the responsibility registry in `agents/core/AGENTS.md` at the config level (not just in prose). CoreBot's own `image_generate`/`video_generate` tools are denied (`agents.list[core].tools.deny`) so it structurally can't silently do PictureBot's job instead of delegating — that gap was found and fixed by live testing. Verified: direct math question answered directly (no delegation); image-generation request correctly spawned a PictureBot sub-agent with a proper structured task packet. Not yet verified end-to-end for finance/coding/file (Anthropic) or actual image output (Google) — see the two live provider issues below. |
+| 4 | CoreBot routing (direct vs. delegate) | ✅ done — CoreBot delegates via OpenClaw's native `sessions_spawn` sub-agent mechanism: `agents.defaults.subagents.requireAgentId=true` plus a per-agent `allowAgents` list enforces the responsibility registry in `agents/core/AGENTS.md` at the config level (not just in prose). CoreBot's own `image_generate`/`video_generate` tools are denied (`agents.list[core].tools.deny`) so it structurally can't silently do PictureBot's job instead of delegating — that gap was found and fixed by live testing. Verified 2026-08-18: direct math question answered directly (no delegation); a finance question correctly spawned a properly structured `sessions_spawn` job packet to FinanceBot end-to-end; direct provider checks confirm FinanceBot/CodingBot/FileBot (Anthropic) and PictureBot's actual image generation (Google) all now succeed — the two provider issues below are resolved. |
 | 5 | Job IDs + Work Registry (includes the per-job cost ledger + `/usage` — see `docs/04-cost-and-token-discipline.md`) | ⬜ not started |
 | 6 | Visible delegation in the server | ⬜ not started |
 | 7+ | State machine, history, versioning, resume, leases, fallback, commands, queueing, security, self-change governance, backups | ⬜ not started |
@@ -50,27 +50,25 @@ We are deliberately not building stages 5+ until 2–4 work end-to-end with
 real Discord messages, per the project's own "don't overcomplicate the
 MVP" rule.
 
-### Live provider issues found while testing (2026-08-18)
+### Live provider issues found while testing (2026-08-18) — all resolved
 
-OpenAI billing (CoreBot) was unfunded as of the Stage 3 commit earlier
-today; it's since been funded and is confirmed working (CoreBot answers
-directly and uses `web_search` successfully). Two others remain, both
-needing action in a provider console, not code:
+OpenAI billing (CoreBot), Anthropic billing (FinanceBot/CodingBot/FileBot),
+and Google quota (PictureBot's image generation) were all unfunded/blocked
+at various points during Stage 3–4 testing today. All three are now
+confirmed working via direct provider-level checks and, for finance, a
+full CoreBot → `sessions_spawn` → FinanceBot round trip.
 
-- **Anthropic (FinanceBot/CodingBot/FileBot)**: API is returning
-  `"Your credit balance is too low to access the Anthropic API"`.
-  OpenClaw auto-disables that auth profile on a rolling 4-hour cooldown
-  after each failed retry. Fix: add credits at
-  console.anthropic.com → Plans & Billing.
-- **Google (PictureBot's image generation specifically)**: actual image
-  generation on `gemini-3.1-pro-preview` is hitting
-  `Quota exceeded ... free_tier_input_token_count, limit: 0` — the free
-  tier allows text chat on this model but not image generation. Text-only
-  Gemini calls (MarBot, ResearchBot, PictureBot's own replies) are
-  unaffected. Fix: enable billing on the Google Cloud project behind the
-  AI Studio key (docs/03-provider-api-keys.md already flagged this as a
-  possibility), or point PictureBot at a Flash-tier model that has free
-  image-gen quota, if one exists.
+### Server memory discipline (2026-08-18)
+
+The Hetzner VPS this all runs on has 2GB RAM and no swap. A background
+script that tried to test multiple specialist agents in parallel via
+`sessions_spawn` OOM-killed the Claude Code process and some `node`
+processes mid-session. The gateway is a systemd user service and restarted
+itself cleanly, but the lesson: **test agents one at a time, in the
+foreground, never via a parallel/background sweep script.** A single
+`openclaw agent --agent <id> --message "..."` call is cheap enough (the
+gateway process gained ~50-70MB RSS per call, not cumulative); running
+several concurrently is what caused the crash.
 
 ## Repo layout
 
@@ -101,6 +99,6 @@ not `agents/<id>/workspace/` as earlier drafts of this README assumed).
 
 ## What to do next (you)
 
-1. Top up Anthropic credits and check the Google Cloud project's billing
-   for image generation — see the live provider issues above. Nothing
-   else in Stage 4 is blocked on you right now.
+Stage 4 is done and all three provider issues are resolved — nothing is
+blocked on you right now. Say the word when you want to start Stage 5
+(Job IDs + Work Registry).
