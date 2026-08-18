@@ -1,0 +1,14 @@
+# Secrets — never committed
+.env
+.env.*
+!.env.example
+*.local.json5
+*.local.json
+secrets/
+
+# Local OpenClaw state if ever copied into the repo by accident
+.openclaw/
+
+# OS / editor noise
+.DS_Store
+node_modules/

@@ -1,0 +1,118 @@
+// openclaw.config.template.json5
+//
+// WHAT THIS FILE IS: a template for the parts of ~/.openclaw/openclaw.json
+// that define our seven-agent company. It is NOT itself the live config —
+// it's checked into git, so it must never contain a real token or API key.
+//
+// HOW IT'S USED (Stage 3, once you have bots + keys):
+// you'll merge the "agents" and "channels.telegram" blocks below into your
+// real ~/.openclaw/openclaw.json, replacing every ${PLACEHOLDER} with a
+// real secret. We'll do that step together rather than you guessing at it.
+//
+// WHY MODEL / AGENT / RESPONSIBILITY ARE KEPT SEPARATE: notice that an
+// agent's *id* (e.g. "finance") never changes, its *model* is just a
+// config value under agents.entries.finance.model, and its
+// *responsibility* lives in agents/finance/AGENTS.md as plain text, not
+// code. Swapping FinanceBot from Claude to another model later is a
+// one-line config edit here — nothing about "what FinanceBot is allowed to
+// do" has to change.
+//
+// VERSION NOTE: this template uses the `agents.entries.<id>` shape
+// documented for current OpenClaw releases. Before merging this on your
+// laptop, run `openclaw --version` and `openclaw config get agents` and
+// tell me what comes back — if your installed version uses a different
+// key name (some docs show `agents.list`), we'll adjust this file to match
+// rather than assuming.
+
+{
+  agents: {
+    defaults: {
+      // Fallback used only if a specific agent entry below doesn't
+      // override it. Kept intentionally generic.
+      subagents: {
+        // Only entries explicitly listed in an agent's own
+        // "subagents.allowAgents" may be sessions_spawn-targeted by it.
+        // This is how we enforce "specialists don't freely commission
+        // each other" (project rule 15) at the OpenClaw config level,
+        // not just in prose.
+        requireAgentId: true,
+      },
+    },
+
+    entries: {
+      core: {
+        model: {
+          primary: "openai:gpt-4.1", // ChatGPT family, per roster
+        },
+        workspace: "~/.openclaw/agents/core/workspace",
+        subagents: {
+          // CoreBot is the only agent allowed to spawn every specialist.
+          allowAgents: ["finance", "picture", "coding", "file", "marketing", "research"],
+          delegationMode: "prefer", // push non-trivial work through sessions_spawn rather than answering directly
+        },
+      },
+
+      finance: {
+        model: { primary: "anthropic:claude-opus-4" },
+        workspace: "~/.openclaw/agents/finance/workspace",
+        subagents: {
+          // FinanceBot may only hand off to FileBot (packaging), per its AGENTS.md.
+          allowAgents: ["file"],
+        },
+      },
+
+      picture: {
+        model: { primary: "google:gemini-2.5-pro" },
+        workspace: "~/.openclaw/agents/picture/workspace",
+        subagents: { allowAgents: [] }, // receives handoffs, doesn't initiate any
+      },
+
+      coding: {
+        model: { primary: "anthropic:claude-opus-4" },
+        workspace: "~/.openclaw/agents/coding/workspace",
+        subagents: { allowAgents: [] }, // routes cross-specialist needs back through core
+      },
+
+      file: {
+        model: { primary: "anthropic:claude-opus-4" },
+        workspace: "~/.openclaw/agents/file/workspace",
+        subagents: { allowAgents: [] },
+      },
+
+      marketing: {
+        model: { primary: "google:gemini-2.5-pro" },
+        workspace: "~/.openclaw/agents/marketing/workspace",
+        subagents: {
+          // MarBot's only permitted outbound handoff is to PictureBot.
+          allowAgents: ["picture"],
+        },
+      },
+
+      research: {
+        model: { primary: "google:gemini-2.5-pro" },
+        workspace: "~/.openclaw/agents/research/workspace",
+        subagents: { allowAgents: [] },
+      },
+    },
+  },
+
+  channels: {
+    telegram: {
+      accounts: {
+        // One Telegram bot account per agent, per project rule 3/11.
+        // Replace each botToken with the real value from BotFather —
+        // in your REAL ~/.openclaw/openclaw.json only, never here.
+        core:      { botToken: "${TELEGRAM_CORE_BOT_TOKEN}" },
+        finance:   { botToken: "${TELEGRAM_FINANCE_BOT_TOKEN}" },
+        picture:   { botToken: "${TELEGRAM_PICTURE_BOT_TOKEN}" },
+        coding:    { botToken: "${TELEGRAM_CODING_BOT_TOKEN}" },
+        file:      { botToken: "${TELEGRAM_FILE_BOT_TOKEN}" },
+        marketing: { botToken: "${TELEGRAM_MARKETING_BOT_TOKEN}" },
+        research:  { botToken: "${TELEGRAM_RESEARCH_BOT_TOKEN}" },
+      },
+      // Bindings (which account → which agent, and which chat it serves)
+      // get finalized in Stage 3 once we have your real company group's
+      // chat ID. Left out here deliberately rather than guessed.
+    },
+  },
+}
