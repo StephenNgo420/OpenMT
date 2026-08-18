@@ -19,7 +19,7 @@ handles it.
 | Accept/assign/complete messages | deterministic templates, no model call | §35, §56 |
 | `/company` dashboard | real provider/runtime state, never guessed | §38 |
 | Owner escalation alert | fires with zero model calls, works even if every provider is down | §33 |
-| Duplicate Telegram deliveries / retries | deduped *before* reaching a model | §40 |
+| Duplicate Discord deliveries / retries | deduped *before* reaching a model | §40 |
 | `/resume` | Work-Registry-built brief, not a full chat replay | §23 |
 | Inter-agent handoffs | structured packet, not resent conversation history | §14 |
 
@@ -88,7 +88,7 @@ per browse, no matter how many times you check.
 
 Mechanically the same as idempotency (§40), stated separately because the
 consequence of getting this wrong is specifically financial: a retried
-Telegram delivery or a double-tapped button must be caught by the
+Discord delivery or a double-tapped button must be caught by the
 `operation_id`/`event_id` check *before* anything reaches a model, not
 after the fact.
 

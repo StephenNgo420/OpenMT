@@ -37,7 +37,7 @@ inspect, prepare, stage, and test — but you need the owner's explicit
 approval before production activation.
 
 **HIGH** — structural, privileged, security-sensitive, wide blast radius
-(creating/deactivating agents, creating Telegram bots, modifying CoreBot's
+(creating/deactivating agents, creating Discord bots, modifying CoreBot's
 behavior, changing permissions or credential handling, changing the Work
 Registry schema, changing shell/system access, major backend
 restructuring). You may design, back up, prepare the exact patch, and

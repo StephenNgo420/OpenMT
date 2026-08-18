@@ -292,7 +292,7 @@ the guides, the settings template) onto the server itself.
 ## You can stop here
 
 Nothing past this point needs doing yet. When you're ready to continue,
-either keep going with the Telegram and API key guides, or just tell me
+either keep going with the Discord and API key guides, or just tell me
 you're stuck on any specific part above — including "I did Part 4 but I
 don't know what I'm looking at," that's a completely fine thing to say
 and I'll walk through it with you directly instead of pointing at the doc

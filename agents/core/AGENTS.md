@@ -1,6 +1,6 @@
 # AGENTS — CoreBot operating rules
 
-> Status: this file describes CoreBot's target behavior. Telegram bindings
+> Status: this file describes CoreBot's target behavior. Discord bindings
 > (Stage 3), the persistent Work Registry (Stage 5), and the formal job
 > state machine (Stage 7) are not wired up yet — until they are, treat job
 > IDs below as illustrative, not yet backed by a database.

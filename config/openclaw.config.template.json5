@@ -5,9 +5,13 @@
 // it's checked into git, so it must never contain a real token or API key.
 //
 // HOW IT'S USED (Stage 3, once you have bots + keys):
-// you'll merge the "agents" and "channels.telegram" blocks below into your
+// you'll merge the "agents" and "channels.discord" blocks below into your
 // real ~/.openclaw/openclaw.json, replacing every ${PLACEHOLDER} with a
 // real secret. We'll do that step together rather than you guessing at it.
+//
+// PLATFORM NOTE: this project runs on Discord, not Telegram (switched
+// before any Telegram-specific work was actually done, so nothing was
+// wasted). See docs/02-discord-bots-setup.md.
 //
 // WHY MODEL / AGENT / RESPONSIBILITY ARE KEPT SEPARATE: notice that an
 // agent's *id* (e.g. "finance") never changes, its *model* is just a
@@ -54,7 +58,10 @@
           // runs on the cheap tier in the same family.
           router: "openai:<cheap-tier-todo>",
         },
-        workspace: "~/.openclaw/agents/core/workspace",
+        // Real observed path on our server (confirmed live, not guessed):
+        // ~/.openclaw/workspace/<id> — not agents/<id>/workspace as
+        // earlier drafts of this file assumed.
+        workspace: "~/.openclaw/workspace/core",
         subagents: {
           // CoreBot is the only agent allowed to spawn every specialist.
           allowAgents: ["finance", "picture", "coding", "file", "marketing", "research"],
@@ -70,7 +77,7 @@
         // Balanced posture: mid-tier Claude model, not the top tier.
         // TODO(stage 3): confirm current mid-tier Anthropic model id.
         model: { primary: "anthropic:<mid-tier-todo>" },
-        workspace: "~/.openclaw/agents/finance/workspace",
+        workspace: "~/.openclaw/workspace/finance",
         subagents: {
           // FinanceBot may only hand off to FileBot (packaging), per its AGENTS.md.
           allowAgents: ["file"],
@@ -83,7 +90,7 @@
         // generation/editing may only be available on specific model ids,
         // so this one needs a deliberate check rather than a guess.
         model: { primary: "google:<mid-tier-todo>" },
-        workspace: "~/.openclaw/agents/picture/workspace",
+        workspace: "~/.openclaw/workspace/picture",
         subagents: { allowAgents: [] }, // receives handoffs, doesn't initiate any
       },
 
@@ -94,7 +101,7 @@
         // that's a deliberate escalation, not the default.
         // TODO(stage 3): confirm current mid-tier Anthropic model id.
         model: { primary: "anthropic:<mid-tier-todo>" },
-        workspace: "~/.openclaw/agents/coding/workspace",
+        workspace: "~/.openclaw/workspace/coding",
         subagents: { allowAgents: [] }, // routes cross-specialist needs back through core
       },
 
@@ -102,7 +109,7 @@
         // Balanced posture: mid-tier Claude model.
         // TODO(stage 3): confirm current mid-tier Anthropic model id.
         model: { primary: "anthropic:<mid-tier-todo>" },
-        workspace: "~/.openclaw/agents/file/workspace",
+        workspace: "~/.openclaw/workspace/file",
         subagents: { allowAgents: [] },
       },
 
@@ -110,7 +117,7 @@
         // Balanced posture: mid-tier Gemini model.
         // TODO(stage 3): confirm current mid-tier Google model id.
         model: { primary: "google:<mid-tier-todo>" },
-        workspace: "~/.openclaw/agents/marketing/workspace",
+        workspace: "~/.openclaw/workspace/marketing",
         subagents: {
           // MarBot's only permitted outbound handoff is to PictureBot.
           allowAgents: ["picture"],
@@ -121,29 +128,66 @@
         // Balanced posture: mid-tier Gemini model.
         // TODO(stage 3): confirm current mid-tier Google model id.
         model: { primary: "google:<mid-tier-todo>" },
-        workspace: "~/.openclaw/agents/research/workspace",
+        workspace: "~/.openclaw/workspace/research",
         subagents: { allowAgents: [] },
       },
     },
   },
 
   channels: {
-    telegram: {
+    discord: {
       accounts: {
-        // One Telegram bot account per agent, per project rule 3/11.
-        // Replace each botToken with the real value from BotFather —
-        // in your REAL ~/.openclaw/openclaw.json only, never here.
-        core:      { botToken: "${TELEGRAM_CORE_BOT_TOKEN}" },
-        finance:   { botToken: "${TELEGRAM_FINANCE_BOT_TOKEN}" },
-        picture:   { botToken: "${TELEGRAM_PICTURE_BOT_TOKEN}" },
-        coding:    { botToken: "${TELEGRAM_CODING_BOT_TOKEN}" },
-        file:      { botToken: "${TELEGRAM_FILE_BOT_TOKEN}" },
-        marketing: { botToken: "${TELEGRAM_MARKETING_BOT_TOKEN}" },
-        research:  { botToken: "${TELEGRAM_RESEARCH_BOT_TOKEN}" },
+        // One Discord bot (application) per agent, per project rule 3/11.
+        // Discord's field is "token", not "botToken" like Telegram's —
+        // confirmed against current OpenClaw docs, not assumed from the
+        // Telegram shape. Replace each token with the real value from the
+        // Discord Developer Portal — in your REAL ~/.openclaw/openclaw.json
+        // only, never here.
+        //
+        // "guilds" names which Discord server(s) each bot is allowed to
+        // operate in — Discord requires this explicitly (Telegram didn't).
+        // ${DISCORD_SERVER_GUILD_ID} is the same one server ID for all 7,
+        // once the company server exists.
+        core: {
+          enabled: true,
+          token: "${DISCORD_CORE_BOT_TOKEN}",
+          guilds: { "${DISCORD_SERVER_GUILD_ID}": {} },
+        },
+        finance: {
+          enabled: true,
+          token: "${DISCORD_FINANCE_BOT_TOKEN}",
+          guilds: { "${DISCORD_SERVER_GUILD_ID}": {} },
+        },
+        picture: {
+          enabled: true,
+          token: "${DISCORD_PICTURE_BOT_TOKEN}",
+          guilds: { "${DISCORD_SERVER_GUILD_ID}": {} },
+        },
+        coding: {
+          enabled: true,
+          token: "${DISCORD_CODING_BOT_TOKEN}",
+          guilds: { "${DISCORD_SERVER_GUILD_ID}": {} },
+        },
+        file: {
+          enabled: true,
+          token: "${DISCORD_FILE_BOT_TOKEN}",
+          guilds: { "${DISCORD_SERVER_GUILD_ID}": {} },
+        },
+        marketing: {
+          enabled: true,
+          token: "${DISCORD_MARKETING_BOT_TOKEN}",
+          guilds: { "${DISCORD_SERVER_GUILD_ID}": {} },
+        },
+        research: {
+          enabled: true,
+          token: "${DISCORD_RESEARCH_BOT_TOKEN}",
+          guilds: { "${DISCORD_SERVER_GUILD_ID}": {} },
+        },
       },
-      // Bindings (which account → which agent, and which chat it serves)
-      // get finalized in Stage 3 once we have your real company group's
-      // chat ID. Left out here deliberately rather than guessed.
+      // Fine-grained bindings (which account -> which agent, which
+      // channel(s) it watches) get finalized in Stage 3 once the real
+      // Discord server + bots exist. Left out here deliberately rather
+      // than guessed.
     },
   },
 }
