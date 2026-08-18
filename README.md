@@ -24,15 +24,15 @@ brief; we are building them incrementally.
 
 Important, because it's easy to get confused:
 
-- **This repository** — edited from a cloud session (or your own
-  Claude Code / editor). It holds config, personas, and (later) the Work
+- **This repository** — holds config, personas, and (later) the Work
   Registry code. Nothing here runs anything by itself.
 - **A small Hetzner VPS** (decided on over a laptop or Raspberry Pi — see
   the setup guide for why) — where the OpenClaw *Gateway* actually runs,
-  24/7, so the Discord bots stay online. Nobody can provision or SSH into
-  that server from this cloud session — you (or a local Claude Code CLI
-  you run yourself) have to execute the setup steps there. See
-  `docs/01-server-setup.md`.
+  24/7, so the Discord bots stay online. As of Stage 4, Claude Code runs
+  directly on this VPS (this repo is cloned there too) with real shell
+  access to `openclaw`, so config edits, gateway restarts, and Discord
+  testing now happen live on the server itself rather than being relayed
+  through chat. See `docs/01-server-setup.md` for how it was provisioned.
 
 ## Current status
 
@@ -40,8 +40,8 @@ Important, because it's easy to get confused:
 |---|---|---|
 | 1 | Environment audit | ✅ done |
 | 2 | Seven-agent architecture (config-as-code) | ✅ done |
-| 3 | Bind each agent to its own Discord bot | ✅ done — all 7 bots created, wired, and confirmed responding live in Discord. Three non-obvious fixes were needed along the way (Discord plugin trust, `group:messaging` tool grant, per-account guild registration) — see the "Gotchas" section in `docs/02-discord-bots-setup.md` and the corrected `config/openclaw.config.template.json5`. OpenAI and Anthropic billing still need to be funded before CoreBot/FinanceBot/CodingBot/FileBot give real answers instead of billing errors — Google/Gemini funding status (PictureBot/MarBot/ResearchBot) unconfirmed. |
-| 4 | CoreBot routing (direct vs. delegate) | ⬜ not started |
+| 3 | Bind each agent to its own Discord bot | ✅ done — all 7 bots created, wired, and confirmed responding live in Discord. Three non-obvious fixes were needed along the way (Discord plugin trust, `group:messaging` tool grant, per-account guild registration) — see the "Gotchas" section in `docs/02-discord-bots-setup.md` and `config/openclaw.config.template.json5`. |
+| 4 | CoreBot routing (direct vs. delegate) | 🟡 in progress — CoreBot now delegates via OpenClaw's native `sessions_spawn` sub-agent mechanism: `agents.defaults.subagents.requireAgentId=true` plus a per-agent `allowAgents` list enforces the responsibility registry in `agents/core/AGENTS.md` at the config level (not just in prose). CoreBot's own `image_generate`/`video_generate` tools are denied (`agents.list[core].tools.deny`) so it structurally can't silently do PictureBot's job instead of delegating — that gap was found and fixed by live testing. Verified: direct math question answered directly (no delegation); image-generation request correctly spawned a PictureBot sub-agent with a proper structured task packet. Not yet verified end-to-end for finance/coding/file (Anthropic) or actual image output (Google) — see the two live provider issues below. |
 | 5 | Job IDs + Work Registry (includes the per-job cost ledger + `/usage` — see `docs/04-cost-and-token-discipline.md`) | ⬜ not started |
 | 6 | Visible delegation in the server | ⬜ not started |
 | 7+ | State machine, history, versioning, resume, leases, fallback, commands, queueing, security, self-change governance, backups | ⬜ not started |
@@ -49,6 +49,28 @@ Important, because it's easy to get confused:
 We are deliberately not building stages 5+ until 2–4 work end-to-end with
 real Discord messages, per the project's own "don't overcomplicate the
 MVP" rule.
+
+### Live provider issues found while testing (2026-08-18)
+
+OpenAI billing (CoreBot) was unfunded as of the Stage 3 commit earlier
+today; it's since been funded and is confirmed working (CoreBot answers
+directly and uses `web_search` successfully). Two others remain, both
+needing action in a provider console, not code:
+
+- **Anthropic (FinanceBot/CodingBot/FileBot)**: API is returning
+  `"Your credit balance is too low to access the Anthropic API"`.
+  OpenClaw auto-disables that auth profile on a rolling 4-hour cooldown
+  after each failed retry. Fix: add credits at
+  console.anthropic.com → Plans & Billing.
+- **Google (PictureBot's image generation specifically)**: actual image
+  generation on `gemini-3.1-pro-preview` is hitting
+  `Quota exceeded ... free_tier_input_token_count, limit: 0` — the free
+  tier allows text chat on this model but not image generation. Text-only
+  Gemini calls (MarBot, ResearchBot, PictureBot's own replies) are
+  unaffected. Fix: enable billing on the Google Cloud project behind the
+  AI Studio key (docs/03-provider-api-keys.md already flagged this as a
+  possibility), or point PictureBot at a Flash-tier model that has free
+  image-gen quota, if one exists.
 
 ## Repo layout
 
@@ -79,8 +101,6 @@ not `agents/<id>/workspace/` as earlier drafts of this README assumed).
 
 ## What to do next (you)
 
-1. **Fund OpenAI and Anthropic billing** — CoreBot (OpenAI) and FinanceBot/CodingBot/FileBot (Anthropic) are fully wired but currently reply with billing errors instead of real answers. `docs/03-provider-api-keys.md` covers where to add a payment method.
-2. Check whether Google/Gemini needs the same — try `@PictureBot`, `@MarBot`, or `@ResearchBot` in the server and see whether they respond normally or also show a billing error.
-
-Once providers are funded, we'll move to Stage 4 — CoreBot actually
-deciding whether to handle a request directly or delegate it.
+1. Top up Anthropic credits and check the Google Cloud project's billing
+   for image generation — see the live provider issues above. Nothing
+   else in Stage 4 is blocked on you right now.
