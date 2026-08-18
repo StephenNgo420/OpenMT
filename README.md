@@ -34,10 +34,10 @@ Important, because it's easy to get confused:
 | Stage | What | Status |
 |---|---|---|
 | 1 | Environment audit | ✅ done |
-| 2 | Seven-agent architecture (config-as-code) | 🟡 in progress |
+| 2 | Seven-agent architecture (config-as-code) | ✅ done |
 | 3 | Bind each agent to its own Telegram bot | ⬜ blocked on you creating bots — see `docs/02-telegram-bots-setup.md` |
 | 4 | CoreBot routing (direct vs. delegate) | ⬜ not started |
-| 5 | Job IDs + Work Registry | ⬜ not started |
+| 5 | Job IDs + Work Registry (includes the per-job cost ledger + `/usage` — see `docs/04-cost-and-token-discipline.md`) | ⬜ not started |
 | 6 | Visible delegation in the group | ⬜ not started |
 | 7+ | State machine, history, versioning, resume, leases, fallback, commands, queueing, security, self-change governance, backups | ⬜ not started |
 

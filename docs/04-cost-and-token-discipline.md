@@ -114,6 +114,85 @@ the config template yet — same reasoning as the OpenClaw version check:
 I'd rather confirm current tier names/pricing when we actually wire keys
 than hardcode a guess now that may already be stale.
 
+## Per-job cost tracking and `/usage`
+
+Every model API response carries the token counts for that exact call
+(input, output, and cached tokens where applicable). Combined with a
+per-model pricing table we already need for the tiering decisions above,
+this means cost is computable with plain arithmetic, immediately, with no
+extra API or model call:
+
+```
+call cost = (input_tokens / 1,000,000 × input_price)
+          + (output_tokens / 1,000,000 × output_price)
+          - (cached-token discount, where the provider offers one)
+```
+
+**Per-job summary.** Every call a job makes gets logged to the Work
+Registry against that job's ID (provider, model, tokens, computed cost,
+timestamp). At job completion, the deterministic completion message (see
+above — never LLM-generated) appends the summed total:
+
+```
+✅ FINANCE_034 completed.
+@MyUsername
+[results]
+💰 $1.46 used
+```
+
+**`/usage`.** Reads the same ledger — a Work Registry query, zero model
+calls, same as every other owner command. Reports spend broken down by
+provider and by agent, for whatever time window you ask (today / this
+month / a given job).
+
+**"Credit left" — what this can and can't mean.** We checked what each
+provider's API actually exposes before designing this, rather than assume:
+
+- **Anthropic**: usage/cost reporting exists (`/v1/organizations/usage_report`,
+  `/v1/organizations/cost_report`) but requires a separate **Admin API
+  key** (`sk-ant-admin-*`), provisionable only by an org admin — a more
+  powerful, riskier credential than the regular key FinanceBot/CodingBot/
+  FileBot actually need to operate. Even with one, it reports *usage in
+  dollars*, not a remaining-balance figure — that's Console-only, not an
+  API.
+- **OpenAI**: similarly, org-level usage/cost reporting needs an admin
+  key. A credit-balance-style endpoint exists but is undocumented and
+  unofficial — not something to depend on for a working feature.
+- **Google**: billing is tied to full Cloud Billing on the GCP project;
+  reading it needs IAM setup well beyond an API key, disproportionate here.
+
+So `/usage` will **not** claim to show your actual live OpenAI/Anthropic/
+Google account balance — that would either require handing the bots a more
+powerful credential than they need, or rely on an endpoint that could
+break without notice. Instead, `/usage` shows **spend we've actually
+tracked, against a budget you set** (this is §41's `max_cost` /
+`warning_threshold`, which was already planned):
+
+```
+/usage
+
+💰 USAGE — this month
+
+CoreBot (OpenAI)      $4.12  / $20 budget   →  $15.88 left
+FinanceBot (Anthropic) $9.30 / $30 budget   →  $20.70 left
+PictureBot (Google)    $2.05 / $15 budget   →  $12.95 left
+...
+```
+
+This is accurate to every call the system actually made, available
+instantly (no provider API round-trip), and works identically across all
+three providers with no extra credentials. If you later want to
+cross-check our ledger against a provider's own official report, that's an
+optional reconciliation step gated behind you deliberately creating an
+Admin-tier key for that provider — never required, never default.
+
+**Pricing table upkeep.** Provider pricing changes over time (e.g. intro
+pricing windows that expire on a fixed date). The pricing table backing
+this calculation needs a periodic manual check, not a per-call live fetch
+— that would be its own wasteful API cost. We'll confirm current pricing
+when we wire real keys in Stage 3, and it's worth a quick recheck
+whenever you notice `/usage` numbers look off.
+
 ## Not solved yet — needs a number from you, not more code
 
 §41's per-job/provider budgets (`max_cost`, `warning_threshold`) need an
