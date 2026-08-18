@@ -4,190 +4,105 @@
 // that define our seven-agent company. It is NOT itself the live config —
 // it's checked into git, so it must never contain a real token or API key.
 //
-// HOW IT'S USED (Stage 3, once you have bots + keys):
-// you'll merge the "agents" and "channels.discord" blocks below into your
-// real ~/.openclaw/openclaw.json, replacing every ${PLACEHOLDER} with a
-// real secret. We'll do that step together rather than you guessing at it.
+// STATUS: Stage 3 (bind each agent to its own Discord bot) is DONE on the
+// real server, confirmed working end-to-end for all 7 agents. This file
+// has been corrected to match what's actually running, based on live
+// `openclaw config get` output and a lot of hands-on debugging — not
+// re-guessed from docs. See "CONFIRMED VS UNVALIDATED" below for what's
+// still speculative.
 //
-// PLATFORM NOTE: this project runs on Discord, not Telegram (switched
-// before any Telegram-specific work was actually done, so nothing was
-// wasted). See docs/02-discord-bots-setup.md.
-//
-// WHY MODEL / AGENT / RESPONSIBILITY ARE KEPT SEPARATE: notice that an
-// agent's *id* (e.g. "finance") never changes, its *model* is just a
-// config value under agents.entries.finance.model, and its
-// *responsibility* lives in agents/finance/AGENTS.md as plain text, not
-// code. Swapping FinanceBot from Claude to another model later is a
-// one-line config edit here — nothing about "what FinanceBot is allowed to
-// do" has to change.
-//
-// VERSION NOTE: this template uses the `agents.entries.<id>` shape
-// documented for current OpenClaw releases. Before merging this on your
-// server, run `openclaw --version` and `openclaw config get agents` and
-// tell me what comes back — if your installed version uses a different
-// key name (some docs show `agents.list`), we'll adjust this file to match
-// rather than assuming.
+// PLATFORM: Discord (switched from an original Telegram plan before any
+// Telegram-specific work existed). See docs/02-discord-bots-setup.md.
 
 {
+  // ---------------------------------------------------------------------
+  // AGENTS — confirmed shape: a top-level "list" ARRAY, each item keyed by
+  // "id" (not an "entries" object keyed by id, as earlier drafts of this
+  // file assumed — corrected after `openclaw config get agents` on the
+  // real server). "model" is a plain "provider/model-id" STRING per agent,
+  // not a nested {primary, router} object — that tiering idea (routing
+  // requests to a cheaper model for classification vs. a stronger one for
+  // real work, see docs/04-cost-and-token-discipline.md) was a Stage-4
+  // design intent that has NOT been validated against the real schema.
+  // Whether/how per-mode model tiering is actually achievable is an open
+  // question for Stage 4, not something this file should claim works.
+  // ---------------------------------------------------------------------
   agents: {
-    defaults: {
-      // Fallback used only if a specific agent entry below doesn't
-      // override it. Kept intentionally generic.
-      subagents: {
-        // Only entries explicitly listed in an agent's own
-        // "subagents.allowAgents" may be sessions_spawn-targeted by it.
-        // This is how we enforce "specialists don't freely commission
-        // each other" (project rule 15) at the OpenClaw config level,
-        // not just in prose.
-        requireAgentId: true,
-      },
-    },
-
-    entries: {
-      core: {
-        // Balanced posture (your choice): ROUTER stays on the cheap tier,
-        // everything else on the mid tier — see
-        // docs/04-cost-and-token-discipline.md#default-posture-balanced.
-        // TODO(stage 3): confirm current OpenAI tier model ids when we
-        // wire real keys — not hardcoding a guess that may be stale.
-        model: {
-          // DIRECT_SPECIALIST + FALLBACK_EXECUTOR tier: mid tier.
-          primary: "openai:<mid-tier-todo>", // ChatGPT family, per roster
-          // ROUTER tier: intent classification + structured task-packet
-          // writing is closer to formatting than deep reasoning, so it
-          // runs on the cheap tier in the same family.
-          router: "openai:<cheap-tier-todo>",
-        },
-        // Real observed path on our server (confirmed live, not guessed):
-        // ~/.openclaw/workspace/<id> — not agents/<id>/workspace as
-        // earlier drafts of this file assumed.
+    list: [
+      {
+        id: "core",
+        model: "openai/<model-id>", // ChatGPT family, per roster. Confirm current tier/id at setup time.
         workspace: "~/.openclaw/workspace/core",
-        subagents: {
-          // CoreBot is the only agent allowed to spawn every specialist.
-          allowAgents: ["finance", "picture", "coding", "file", "marketing", "research"],
-          delegationMode: "prefer", // push non-trivial work through sessions_spawn rather than answering directly
-        },
-        // Static system-prompt content (SOUL.md + AGENTS.md) should be
-        // marked cacheable once we wire this up in Stage 4, so repeat
-        // calls in the same session don't re-bill the full input tokens
-        // for personas that never change mid-session.
+        // subagents.allowAgents (delegation graph) is UNVALIDATED design
+        // intent for Stage 4 — never actually applied via `config patch`
+        // on the real server, so don't assume this field name/shape is
+        // correct until Stage 4 testing confirms it.
+        // subagents: { allowAgents: ["finance", "picture", "coding", "file", "marketing", "research"] },
       },
+      { id: "finance",   model: "anthropic/<model-id>", workspace: "~/.openclaw/workspace/finance" },
+      { id: "picture",   model: "google/<model-id>",    workspace: "~/.openclaw/workspace/picture" },
+      { id: "coding",    model: "anthropic/<model-id>", workspace: "~/.openclaw/workspace/coding" },
+      { id: "file",      model: "anthropic/<model-id>", workspace: "~/.openclaw/workspace/file" },
+      { id: "marketing", model: "google/<model-id>",    workspace: "~/.openclaw/workspace/marketing" },
+      { id: "research",  model: "google/<model-id>",    workspace: "~/.openclaw/workspace/research" },
+    ],
+  },
 
-      finance: {
-        // Balanced posture: mid-tier Claude model, not the top tier.
-        // TODO(stage 3): confirm current mid-tier Anthropic model id.
-        model: { primary: "anthropic:<mid-tier-todo>" },
-        workspace: "~/.openclaw/workspace/finance",
-        subagents: {
-          // FinanceBot may only hand off to FileBot (packaging), per its AGENTS.md.
-          allowAgents: ["file"],
-        },
-      },
-
-      picture: {
-        // Balanced posture: mid-tier Gemini model.
-        // TODO(stage 3): confirm current mid-tier Google model id — image
-        // generation/editing may only be available on specific model ids,
-        // so this one needs a deliberate check rather than a guess.
-        model: { primary: "google:<mid-tier-todo>" },
-        workspace: "~/.openclaw/workspace/picture",
-        subagents: { allowAgents: [] }, // receives handoffs, doesn't initiate any
-      },
-
-      coding: {
-        // Balanced posture: mid-tier Claude model by default. CodingBot's
-        // internal-systems-engineer work (self-change, §42-48) may
-        // warrant escalating to the top tier on a case-by-case basis —
-        // that's a deliberate escalation, not the default.
-        // TODO(stage 3): confirm current mid-tier Anthropic model id.
-        model: { primary: "anthropic:<mid-tier-todo>" },
-        workspace: "~/.openclaw/workspace/coding",
-        subagents: { allowAgents: [] }, // routes cross-specialist needs back through core
-      },
-
-      file: {
-        // Balanced posture: mid-tier Claude model.
-        // TODO(stage 3): confirm current mid-tier Anthropic model id.
-        model: { primary: "anthropic:<mid-tier-todo>" },
-        workspace: "~/.openclaw/workspace/file",
-        subagents: { allowAgents: [] },
-      },
-
-      marketing: {
-        // Balanced posture: mid-tier Gemini model.
-        // TODO(stage 3): confirm current mid-tier Google model id.
-        model: { primary: "google:<mid-tier-todo>" },
-        workspace: "~/.openclaw/workspace/marketing",
-        subagents: {
-          // MarBot's only permitted outbound handoff is to PictureBot.
-          allowAgents: ["picture"],
-        },
-      },
-
-      research: {
-        // Balanced posture: mid-tier Gemini model.
-        // TODO(stage 3): confirm current mid-tier Google model id.
-        model: { primary: "google:<mid-tier-todo>" },
-        workspace: "~/.openclaw/workspace/research",
-        subagents: { allowAgents: [] },
-      },
+  // ---------------------------------------------------------------------
+  // PLUGINS — required, confirmed live. Without this, the gateway logs
+  // "external plugin discord is installed without explicit trust" and
+  // (in our case) the plugin still partly worked but this is the correct,
+  // intended way to enable it rather than relying on auto-load.
+  // ---------------------------------------------------------------------
+  plugins: {
+    entries: {
+      discord: { enabled: true },
     },
   },
 
+  // ---------------------------------------------------------------------
+  // TOOLS — required, confirmed live. Without "group:messaging" here,
+  // agents can receive Discord messages but cannot reply, upload files,
+  // or react — they fail completely silently (no error, no log, nothing)
+  // which cost significant time to diagnose. `alsoAllow` ADDS to the
+  // default tool set rather than replacing it (unlike the stricter
+  // `allow` field) — confirmed by reading the schema before using it.
+  // ---------------------------------------------------------------------
+  tools: {
+    alsoAllow: ["group:messaging"],
+  },
+
+  // ---------------------------------------------------------------------
+  // CHANNELS — Discord. One bot (application) per agent, per project
+  // rule 3/11. Confirmed field names: "token" (not "botToken" like
+  // Telegram), and "guilds" keyed by the numeric Discord guild/server ID.
+  //
+  // THE PART THAT COST THE MOST TIME TO FIND: an account's "guilds" entry
+  // is not optional decoration — without registering the guild ID here,
+  // the bot connects, shows online, and Discord's own transport layer
+  // even registers inbound messages ("in: Xm ago" in `channels status`),
+  // but the message is silently NEVER routed to the agent — no session
+  // is ever created, no error anywhere. Registering the guild ID (even
+  // as an empty {} — no further per-channel config required to get a
+  // basic response working) was the actual fix.
+  // ---------------------------------------------------------------------
   channels: {
     discord: {
       accounts: {
-        // One Discord bot (application) per agent, per project rule 3/11.
-        // Discord's field is "token", not "botToken" like Telegram's —
-        // confirmed against current OpenClaw docs, not assumed from the
-        // Telegram shape. Replace each token with the real value from the
-        // Discord Developer Portal — in your REAL ~/.openclaw/openclaw.json
-        // only, never here.
-        //
-        // "guilds" names which Discord server(s) each bot is allowed to
-        // operate in — Discord requires this explicitly (Telegram didn't).
-        // ${DISCORD_SERVER_GUILD_ID} is the same one server ID for all 7,
-        // once the company server exists.
-        core: {
-          enabled: true,
-          token: "${DISCORD_CORE_BOT_TOKEN}",
-          guilds: { "${DISCORD_SERVER_GUILD_ID}": {} },
-        },
-        finance: {
-          enabled: true,
-          token: "${DISCORD_FINANCE_BOT_TOKEN}",
-          guilds: { "${DISCORD_SERVER_GUILD_ID}": {} },
-        },
-        picture: {
-          enabled: true,
-          token: "${DISCORD_PICTURE_BOT_TOKEN}",
-          guilds: { "${DISCORD_SERVER_GUILD_ID}": {} },
-        },
-        coding: {
-          enabled: true,
-          token: "${DISCORD_CODING_BOT_TOKEN}",
-          guilds: { "${DISCORD_SERVER_GUILD_ID}": {} },
-        },
-        file: {
-          enabled: true,
-          token: "${DISCORD_FILE_BOT_TOKEN}",
-          guilds: { "${DISCORD_SERVER_GUILD_ID}": {} },
-        },
-        marketing: {
-          enabled: true,
-          token: "${DISCORD_MARKETING_BOT_TOKEN}",
-          guilds: { "${DISCORD_SERVER_GUILD_ID}": {} },
-        },
-        research: {
-          enabled: true,
-          token: "${DISCORD_RESEARCH_BOT_TOKEN}",
-          guilds: { "${DISCORD_SERVER_GUILD_ID}": {} },
-        },
+        core:      { enabled: true, token: "${DISCORD_CORE_BOT_TOKEN}",      guilds: { "${DISCORD_SERVER_GUILD_ID}": {} } },
+        finance:   { enabled: true, token: "${DISCORD_FINANCE_BOT_TOKEN}",   guilds: { "${DISCORD_SERVER_GUILD_ID}": {} } },
+        picture:   { enabled: true, token: "${DISCORD_PICTURE_BOT_TOKEN}",   guilds: { "${DISCORD_SERVER_GUILD_ID}": {} } },
+        coding:    { enabled: true, token: "${DISCORD_CODING_BOT_TOKEN}",    guilds: { "${DISCORD_SERVER_GUILD_ID}": {} } },
+        file:      { enabled: true, token: "${DISCORD_FILE_BOT_TOKEN}",      guilds: { "${DISCORD_SERVER_GUILD_ID}": {} } },
+        marketing: { enabled: true, token: "${DISCORD_MARKETING_BOT_TOKEN}", guilds: { "${DISCORD_SERVER_GUILD_ID}": {} } },
+        research:  { enabled: true, token: "${DISCORD_RESEARCH_BOT_TOKEN}", guilds: { "${DISCORD_SERVER_GUILD_ID}": {} } },
       },
-      // Fine-grained bindings (which account -> which agent, which
-      // channel(s) it watches) get finalized in Stage 3 once the real
-      // Discord server + bots exist. Left out here deliberately rather
-      // than guessed.
+      // Routing bindings (which Discord account belongs to which agent)
+      // are NOT hand-authored JSON here — they're applied with:
+      //   openclaw agents bind --agent <id> --bind discord:<id>
+      // which writes its own config section we haven't fully mapped out
+      // (confirmed to work via the CLI; the exact JSON it produces is an
+      // implementation detail we didn't need to reverse-engineer).
     },
   },
 }

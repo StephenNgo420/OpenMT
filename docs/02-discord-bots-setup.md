@@ -99,3 +99,73 @@ created" — **do not paste the actual tokens into our chat.** When we get
 to wiring the real config, I'll tell you exactly which file to paste each
 one into on your own server, which stays local and out of git — same as
 we did for the API keys.
+
+## Wiring a bot's token in (once you have it)
+
+Skip the interactive `openclaw agents add <id>` wizard for this part — it
+looped unpredictably during our own setup. Use a direct config patch
+instead, one bot at a time:
+
+```bash
+openclaw config patch --stdin <<'EOF'
+{
+  channels: {
+    discord: {
+      accounts: {
+        <id>: {
+          enabled: true,
+          token: "PASTE_THE_BOT_TOKEN_HERE",
+          guilds: {
+            "YOUR_GUILD_ID": {}
+          }
+        }
+      }
+    }
+  }
+}
+EOF
+```
+
+replacing `<id>` with the agent's id (`core`, `finance`, `picture`,
+`coding`, `file`, `marketing`, or `research`) and `YOUR_GUILD_ID` with your
+server's numeric ID (Developer Mode → right-click server icon → Copy
+Server ID). Then bind it:
+
+```bash
+openclaw agents bind --agent <id> --bind discord:<id>
+```
+
+Once all 7 are patched and bound, restart once to apply everything:
+```bash
+openclaw gateway restart
+```
+
+## Gotchas we actually hit (in case they recur)
+
+Three separate, non-obvious things had to all be true before a single bot
+would respond — worth knowing since they're easy to miss and produce
+**zero errors anywhere** when missing (not in Discord, not in the logs):
+
+1. **The Discord plugin needs explicit trust.** Without
+   `plugins.entries.discord.enabled: true` in the config, the gateway logs
+   a warning about the plugin running "without explicit trust" and some
+   things behave unpredictably. This is a one-time, global fix.
+2. **Agents need the messaging tool group.** Without
+   `tools.alsoAllow: ["group:messaging"]` (global), an agent can receive a
+   Discord message but has no way to reply, upload a file, or react —
+   it fails completely silently. `openclaw doctor` actually flags this
+   one directly if you run it.
+3. **The single biggest time sink: a Discord account needs its guild
+   registered.** Adding a bot's token is not enough — without
+   `channels.discord.accounts.<id>.guilds.<guildId>: {}`, the bot connects,
+   shows online, and Discord-level transport even acknowledges receiving
+   the message (`openclaw channels status` shows `in: Xm ago`) — but the
+   message is never routed to the agent. No session ever gets created, no
+   error is logged anywhere, even at `debug`/`trace` log level. Registering
+   the guild ID (an empty `{}` is enough — no need to also list specific
+   channels to get a basic response working) was the actual fix.
+
+If a bot ever goes silent again, check these three first, in this order:
+`openclaw doctor` (catches #1 and #2), then `openclaw channels status`
+(shows whether `in:` is updating — if it is but the bot still doesn't
+respond, it's almost certainly #3).

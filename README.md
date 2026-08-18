@@ -40,7 +40,7 @@ Important, because it's easy to get confused:
 |---|---|---|
 | 1 | Environment audit | ✅ done |
 | 2 | Seven-agent architecture (config-as-code) | ✅ done |
-| 3 | Bind each agent to its own Discord bot | 🟡 in progress — server provisioned, OpenClaw installed, all 7 agents created with correct model provider + API key each (core→OpenAI, finance/coding/file→Anthropic, picture/marketing/research→Google), personas copied into each workspace, repo cloned onto the server. Still needed: create the 7 Discord bots (`docs/02-discord-bots-setup.md`) and bind each to its agent. |
+| 3 | Bind each agent to its own Discord bot | ✅ done — all 7 bots created, wired, and confirmed responding live in Discord. Three non-obvious fixes were needed along the way (Discord plugin trust, `group:messaging` tool grant, per-account guild registration) — see the "Gotchas" section in `docs/02-discord-bots-setup.md` and the corrected `config/openclaw.config.template.json5`. OpenAI and Anthropic billing still need to be funded before CoreBot/FinanceBot/CodingBot/FileBot give real answers instead of billing errors — Google/Gemini funding status (PictureBot/MarBot/ResearchBot) unconfirmed. |
 | 4 | CoreBot routing (direct vs. delegate) | ⬜ not started |
 | 5 | Job IDs + Work Registry (includes the per-job cost ledger + `/usage` — see `docs/04-cost-and-token-discipline.md`) | ⬜ not started |
 | 6 | Visible delegation in the server | ⬜ not started |
@@ -79,7 +79,8 @@ not `agents/<id>/workspace/` as earlier drafts of this README assumed).
 
 ## What to do next (you)
 
-1. **Create the 7 Discord bots + 1 server** via the Developer Portal — `docs/02-discord-bots-setup.md`. (API keys and server provisioning are already done.)
+1. **Fund OpenAI and Anthropic billing** — CoreBot (OpenAI) and FinanceBot/CodingBot/FileBot (Anthropic) are fully wired but currently reply with billing errors instead of real answers. `docs/03-provider-api-keys.md` covers where to add a payment method.
+2. Check whether Google/Gemini needs the same — try `@PictureBot`, `@MarBot`, or `@ResearchBot` in the server and see whether they respond normally or also show a billing error.
 
-Once that's done, come back and we'll wire the real Discord tokens into
-the config and get CoreBot actually live in the server (finishing Stage 3).
+Once providers are funded, we'll move to Stage 4 — CoreBot actually
+deciding whether to handle a request directly or delegate it.
