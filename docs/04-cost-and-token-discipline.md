@@ -92,6 +92,28 @@ Telegram delivery or a double-tapped button must be caught by the
 `operation_id`/`event_id` check *before* anything reaches a model, not
 after the fact.
 
+## Default posture: Balanced
+
+You chose **Balanced**: the cheap model tier is reserved strictly for pure
+classification/routing work (CoreBot's ROUTER mode). Every specialist
+(FinanceBot, PictureBot, CodingBot, FileBot, MarBot, ResearchBot) defaults
+to its **mid-tier** model, not the cheapest and not the strongest —
+trading a bit of per-job cost for more consistent output quality than the
+cheap tier would give, without paying top-tier prices while you're still
+testing the system end-to-end.
+
+Concretely, once real keys are wired (Stage 3):
+- CoreBot ROUTER mode → cheap tier
+- CoreBot DIRECT_SPECIALIST / FALLBACK_EXECUTOR, and every specialist's
+  primary model → mid-tier for that provider
+- Escalation to a stronger model happens deliberately (e.g. a Definition-
+  of-Done check keeps failing on the mid-tier output), not by default
+
+We haven't pinned exact mid-tier model IDs for OpenAI/Anthropic/Google in
+the config template yet — same reasoning as the OpenClaw version check:
+I'd rather confirm current tier names/pricing when we actually wire keys
+than hardcode a guess now that may already be stale.
+
 ## Not solved yet — needs a number from you, not more code
 
 §41's per-job/provider budgets (`max_cost`, `warning_threshold`) need an

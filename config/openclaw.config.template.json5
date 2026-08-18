@@ -41,16 +41,17 @@
 
     entries: {
       core: {
+        // Balanced posture (your choice): ROUTER stays on the cheap tier,
+        // everything else on the mid tier — see
+        // docs/04-cost-and-token-discipline.md#default-posture-balanced.
+        // TODO(stage 3): confirm current OpenAI tier model ids when we
+        // wire real keys — not hardcoding a guess that may be stale.
         model: {
-          // Default/DIRECT_SPECIALIST + FALLBACK_EXECUTOR tier: full model.
-          primary: "openai:gpt-4.1", // ChatGPT family, per roster
+          // DIRECT_SPECIALIST + FALLBACK_EXECUTOR tier: mid tier.
+          primary: "openai:<mid-tier-todo>", // ChatGPT family, per roster
           // ROUTER tier: intent classification + structured task-packet
           // writing is closer to formatting than deep reasoning, so it
-          // runs on a cheaper model in the same family. See
-          // docs/04-cost-and-token-discipline.md for the reasoning.
-          // TODO(stage 3): confirm the current cheap-tier OpenAI model id
-          // when we wire real keys, rather than hardcoding one that may
-          // be stale by then.
+          // runs on the cheap tier in the same family.
           router: "openai:<cheap-tier-todo>",
         },
         workspace: "~/.openclaw/agents/core/workspace",
@@ -66,7 +67,9 @@
       },
 
       finance: {
-        model: { primary: "anthropic:claude-opus-4" },
+        // Balanced posture: mid-tier Claude model, not the top tier.
+        // TODO(stage 3): confirm current mid-tier Anthropic model id.
+        model: { primary: "anthropic:<mid-tier-todo>" },
         workspace: "~/.openclaw/agents/finance/workspace",
         subagents: {
           // FinanceBot may only hand off to FileBot (packaging), per its AGENTS.md.
@@ -75,25 +78,38 @@
       },
 
       picture: {
-        model: { primary: "google:gemini-2.5-pro" },
+        // Balanced posture: mid-tier Gemini model.
+        // TODO(stage 3): confirm current mid-tier Google model id — image
+        // generation/editing may only be available on specific model ids,
+        // so this one needs a deliberate check rather than a guess.
+        model: { primary: "google:<mid-tier-todo>" },
         workspace: "~/.openclaw/agents/picture/workspace",
         subagents: { allowAgents: [] }, // receives handoffs, doesn't initiate any
       },
 
       coding: {
-        model: { primary: "anthropic:claude-opus-4" },
+        // Balanced posture: mid-tier Claude model by default. CodingBot's
+        // internal-systems-engineer work (self-change, §42-48) may
+        // warrant escalating to the top tier on a case-by-case basis —
+        // that's a deliberate escalation, not the default.
+        // TODO(stage 3): confirm current mid-tier Anthropic model id.
+        model: { primary: "anthropic:<mid-tier-todo>" },
         workspace: "~/.openclaw/agents/coding/workspace",
         subagents: { allowAgents: [] }, // routes cross-specialist needs back through core
       },
 
       file: {
-        model: { primary: "anthropic:claude-opus-4" },
+        // Balanced posture: mid-tier Claude model.
+        // TODO(stage 3): confirm current mid-tier Anthropic model id.
+        model: { primary: "anthropic:<mid-tier-todo>" },
         workspace: "~/.openclaw/agents/file/workspace",
         subagents: { allowAgents: [] },
       },
 
       marketing: {
-        model: { primary: "google:gemini-2.5-pro" },
+        // Balanced posture: mid-tier Gemini model.
+        // TODO(stage 3): confirm current mid-tier Google model id.
+        model: { primary: "google:<mid-tier-todo>" },
         workspace: "~/.openclaw/agents/marketing/workspace",
         subagents: {
           // MarBot's only permitted outbound handoff is to PictureBot.
@@ -102,7 +118,9 @@
       },
 
       research: {
-        model: { primary: "google:gemini-2.5-pro" },
+        // Balanced posture: mid-tier Gemini model.
+        // TODO(stage 3): confirm current mid-tier Google model id.
+        model: { primary: "google:<mid-tier-todo>" },
         workspace: "~/.openclaw/agents/research/workspace",
         subagents: { allowAgents: [] },
       },
