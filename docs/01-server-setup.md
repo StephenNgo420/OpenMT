@@ -1,176 +1,299 @@
-# 1. Set up your Hetzner server
+# 1. Setting up your server (plain-language version)
 
-**What this is:** you decided on a small Hetzner VPS (~€4.35/mo, 2 vCPU /
-4GB RAM) as the always-on machine that runs OpenClaw's Gateway 24/7. This
-guide gets you from "no server" to "OpenClaw running and surviving reboots"
-on that machine.
+This guide assumes you've never done anything like this before. Every
+technical word gets explained in plain English the first time it shows
+up. Go slowly — there's no rush, and nothing here is undoable.
 
-**A device you still need, but only briefly:** setting this up requires
-typing commands into the server over SSH — from your phone, a borrowed
-computer, a library machine, whatever you have access to. It does **not**
-need to be powerful and it does **not** need to stay on afterward — only
-the Hetzner server itself needs to stay running 24/7. Once setup is done,
-you can check in from any device whenever you like.
+## First, four words you'll keep seeing
 
-## Step 1 — Create a Hetzner account and a server
+- **Server** — a computer that isn't yours, sitting in a company's
+  building somewhere, that never turns off. You're going to "rent" one
+  (a few dollars a month) so it can run your bots all day and night,
+  instead of needing your own device to stay on.
+- **Terminal** — a plain window where you type instructions as text and
+  press Enter, instead of clicking buttons. That's the only "app" you'll
+  use for most of this. Every computer already has one built in — you
+  don't install anything new to get it.
+- **SSH** — the method that lets the terminal on *your* device talk
+  securely to the *server*, over the internet, as if you were typing
+  directly on it. Think of it like a phone call that only your device and
+  the server can hear.
+- **Command** — one line of text you type into the terminal and press
+  Enter to run. Every gray box below is something you type or paste,
+  exactly as written, one box at a time.
 
-1. Go to **https://www.hetzner.com/cloud** and sign up.
-2. Add a payment method (Hetzner is pay-as-you-go, billed hourly up to a
-   monthly cap — expect roughly €4.35/month for what we're setting up).
-3. Create a new project (any name, e.g. "AI Company").
+That's it — those four words cover almost everything below.
 
-We'll create the actual server in Step 3, after the SSH key is ready —
-Hetzner lets you attach the key at creation time, which saves a step.
+## Before you start: open a terminal on your own device
 
-## Step 2 — Create an SSH key
+You'll use this same window for this entire guide.
 
-This is a matched pair of files: a private key that stays only on your
-device, and a public key you give to Hetzner. It's how you prove it's you
-connecting, without typing a password every time.
+- **Mac**: press `Cmd + Space`, type `Terminal`, press Enter.
+- **Windows**: press the Windows key, type `PowerShell`, press Enter.
+- **Phone**: you'll need an app for this — search your app store for
+  "Termius" (free), which does the same job with buttons instead of
+  typed commands. Tell me if you're on a phone and I'll give
+  Termius-specific steps instead of the ones below.
 
-**Mac/Linux (or Windows using WSL/PowerShell with OpenSSH, which ships
-built-in on modern Windows):**
+You should now see a plain window, probably black or white, with some
+text and a blinking cursor. That's the terminal. Nothing to type yet.
+
+---
+
+## Part 1 — Rent the server
+
+1. On your device, open a web browser (like you would for any website)
+   and go to **hetzner.com/cloud**.
+2. Sign up like you would for any other website — email, password.
+3. It will ask for a payment card. This is a real, small, ongoing charge
+   (about €4.35/month, roughly $5) — it's not a free trial. Add a card
+   the same way you would on any shopping site.
+4. Once signed in, click **"New Project"**. Name it anything, e.g.
+   "AI Company". This is just a folder to keep this server organized —
+   nothing technical about it.
+
+Stop here — don't create the actual server yet. We need one more thing
+ready first (Part 2), because it saves a step.
+
+---
+
+## Part 2 — Create your "key" (so you can log in without a password)
+
+**What this is, in plain terms:** instead of a password, we're going to
+create two matching files — like a lock and a key. One (the "key") stays
+on your device forever and you never share it. The other (the "lock")
+gets given to the server. When they match, you get in. This is more
+secure than a password and, once set up, means you never have to type a
+password again.
+
+In your terminal, type this exactly and press Enter:
+
 ```bash
-ssh-keygen -t ed25519 -C "your-email@example.com"
+ssh-keygen -t ed25519
 ```
-Press Enter through the prompts (default file location is fine; a
-passphrase is optional but recommended). This creates two files, typically
-`~/.ssh/id_ed25519` (private — never share this) and
-`~/.ssh/id_ed25519.pub` (public — this one goes to Hetzner).
 
-**Print the public key so you can copy it:**
+It will ask a couple of questions — for all of them, just press Enter
+without typing anything (this accepts the sensible default answer).
+
+**What you'll see when it's done:** a short message mentioning
+`id_ed25519` and `id_ed25519.pub` — these are your two files (the key and
+the lock). You don't need to find or open them yourself; the next command
+does that for you.
+
+Now run this, which prints the "lock" half so you can copy it:
+
 ```bash
 cat ~/.ssh/id_ed25519.pub
 ```
-Copy the whole line it prints (starts with `ssh-ed25519`).
 
-**If you're on a phone:** an SSH app like Termius can generate a key pair
-for you in its interface — same idea, just through a GUI instead of a
-terminal command.
+**What you'll see:** one long line of text starting with `ssh-ed25519`.
+Select that entire line with your mouse/trackpad and copy it (however you
+normally copy text on your device — right-click → Copy, or Cmd/Ctrl+C).
+Keep it copied, you'll paste it in the next step.
 
-## Step 3 — Add the key to Hetzner, then create the server
+---
 
-1. In the Hetzner Cloud Console, open your project → **Security → SSH
-   Keys → Add SSH key**. Paste the public key line, give it a name.
-2. **Servers → Add Server**:
-   - Location: whichever is closest to you.
-   - Image: **Ubuntu**, latest LTS version offered in the list.
-   - Type: **CX22** (2 vCPU / 4GB RAM / shared).
-   - SSH Key: select the key you just added — do **not** set a root
-     password instead; the key is more secure and is what the rest of
-     this guide assumes.
-3. Create it. Hetzner shows you the server's public IP address — copy
-   that, you'll need it constantly.
+## Part 3 — Give the "lock" to Hetzner and create the server
 
-## Step 4 — Connect and create a non-root user
+Back in your browser, on the Hetzner website:
 
-Never leave `root` as your everyday login — it's the account with zero
-restrictions, so a mistake or a compromised credential does maximum
-damage. First connection only, then we switch away from it.
+1. In your project, find **Security** in the left menu → **SSH Keys** →
+   **Add SSH key**.
+2. Paste the line you copied (the one starting with `ssh-ed25519`) into
+   the box. Give it any name, e.g. "my key". Save it.
+3. Now find **Servers** in the left menu → **Add Server** (or **Create
+   Server**).
+4. You'll be asked a few choices — here's what each means and what to
+   pick:
+   - **Location**: pick whichever city is closest to you. Doesn't matter
+     much beyond that.
+   - **Image**: this is the server's operating system — like choosing
+     Windows or macOS, except this one is called **Ubuntu**. Pick
+     "Ubuntu" and whichever version is marked as the newest/recommended
+     one (usually labeled "LTS").
+   - **Type**: pick the one labeled **CX22**. This is the size/power of
+     the server — CX22 is small and cheap but enough for what we're
+     doing.
+   - **SSH Key**: select the key you just added by name (e.g. "my key").
+     Do not set a password instead — the key is what the rest of this
+     guide expects.
+5. Click **Create & Buy now** (or similar). Within a few seconds, you'll
+   see your new server in the list, along with an **IP address** — a
+   string of numbers like `95.216.xxx.xxx`. This number is your server's
+   "phone number" — copy it somewhere, you'll need it constantly.
+
+**How to tell it worked:** the server shows up in your Hetzner dashboard
+with a green "running" indicator and that IP address next to it.
+
+---
+
+## Part 4 — Connect to your new server for the first time
+
+Back in your terminal (on your own device), type this — replacing
+`YOUR_SERVER_IP` with the actual numbers you copied, keeping everything
+else exactly as written:
 
 ```bash
 ssh root@YOUR_SERVER_IP
 ```
 
-Once connected:
-```bash
-adduser openmt          # creates a new user — pick any username, follow the prompts
-usermod -aG sudo openmt # gives it permission to run admin commands via `sudo`
-rsync --archive --chown=openmt:openmt ~/.ssh /home/openmt   # copies your SSH key to the new user
-```
+The first time, it'll ask something like "are you sure you want to
+continue connecting?" — type `yes` and press Enter. That's just your
+device confirming it's talking to the right server the first time; it
+won't ask again after this.
 
-**How to tell it worked:** open a new terminal tab/window (keep the root
-session open until this is confirmed) and run:
+**How to tell it worked:** your terminal's prompt changes — it'll now
+start with something like `root@your-server-name`. That means you are now
+typing directly on the server, not your own device anymore. Everything
+you type from here runs *there*.
+
+---
+
+## Part 5 — Create your everyday account on the server
+
+**Why:** `root` (who you just logged in as) is the server's all-powerful
+account — it can do absolutely anything, including break things badly by
+accident. We're going to create a normal, safer account for everyday use,
+the same way your own computer has "you" as a limited account rather than
+always running as an all-powerful administrator.
+
+Still connected to the server (prompt starts with `root@...`), type each
+of these one at a time, pressing Enter after each:
+
+```bash
+adduser openmt
+```
+This asks a few questions (a password for this new account — pick one
+and remember it; you can press Enter through the rest). This creates the
+new account, named `openmt`.
+
+```bash
+usermod -aG sudo openmt
+```
+This gives the `openmt` account permission to temporarily act as an
+admin when needed (by typing `sudo` before a command), without being
+all-powerful all the time.
+
+```bash
+rsync --archive --chown=openmt:openmt ~/.ssh /home/openmt
+```
+This copies your "key" access (from Part 2) over to the new `openmt`
+account, so you can log in as `openmt` the same key-based way.
+
+**How to tell it worked:** open a **second, separate** terminal window on
+your own device (keep this current one open too), and type:
 ```bash
 ssh openmt@YOUR_SERVER_IP
 ```
-You should connect without a password prompt. From now on, always connect
-as `openmt` (or whatever you named it), never `root`.
+If it connects without asking for a password, it worked. From now on,
+always connect using this `openmt` line, never the `root` one.
 
-## Step 5 — Lock down root login and add a firewall
+---
 
-Still logged in as `openmt` (using `sudo` for anything that needs it):
+## Part 6 — Basic safety steps
+
+Back in a window connected as `openmt` (prompt starts with
+`openmt@...`), run these one at a time:
 
 ```bash
-sudo passwd -l root   # locks the root password so it can't be used to log in directly
+sudo passwd -l root
 ```
-
-Now the firewall. We only need one port open — SSH — because OpenClaw
-never needs to accept inbound web traffic: Telegram bots poll outward for
-messages, and the model providers are all outbound calls too.
+This turns off the ability to log in directly as the all-powerful `root`
+account — nobody (including you) can use it as a way in anymore, only
+your safer `openmt` account.
 
 ```bash
 sudo ufw allow OpenSSH
 sudo ufw enable
 ```
-Confirm with `y` when prompted. **How to tell it worked:**
+This turns on the server's **firewall** — think of it as a locked door
+with exactly one keyhole. These two lines say "only allow the one
+connection type we're actually using (SSH, what you're using right now),
+block everything else." When it asks to confirm, type `y` and press
+Enter.
+
+**How to tell it worked:**
 ```bash
 sudo ufw status
 ```
-should show `OpenSSH` as the only allowed rule, status active.
+should print something showing `OpenSSH` as allowed, and say the
+firewall is active.
 
-## Step 6 — Install OpenClaw
+---
 
-Same install method as any Linux machine:
+## Part 7 — Install OpenClaw itself
+
+Still connected as `openmt`:
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
+```
+This downloads and installs the OpenClaw software — same idea as
+installing an app, just through text instead of an app store.
+
+```bash
 openclaw --version
 ```
-Tell me the version it prints, same reason as always — I want to confirm
-it against current docs before we rely on version-specific config.
+**How to tell it worked:** this should print a version number (like
+`1.4.2`) rather than an error. Send me exactly what it prints — I want to
+double-check a couple of settings against that specific version before we
+rely on them.
 
 ```bash
 openclaw onboard --install-daemon
 ```
-This creates `~/.openclaw/openclaw.json` and installs the Gateway as a
-**systemd user service** so it survives crashes and reboots.
+This sets OpenClaw up to run continuously in the background, and asks a
+few setup questions — reasonable default answers are fine for all of
+them, since we'll adjust the important parts together later.
 
-## Step 7 — Make it survive you logging out (the easy-to-miss step)
+---
 
-By default, a systemd *user* service like this one only keeps running
-while you have an active login session — the moment your SSH connection
-closes, it could stop. "Enable lingering" tells the server to keep your
-user's services running even with nobody logged in, which is the entire
-point of putting this on a VPS instead of a laptop:
+## Part 8 — Make sure it keeps running even after you log out
+
+**Why this step exists:** without it, your bots would quietly stop the
+moment you close your terminal window — which would defeat the entire
+reason we rented a server instead of using your own device.
 
 ```bash
 sudo loginctl enable-linger openmt
 ```
 
-**How to verify this actually worked:** check status, then disconnect
-completely and reconnect to confirm it's still running.
+**How to actually prove it worked** (this is the one check worth not
+skipping):
 ```bash
-openclaw gateway status   # should show running
-exit                      # disconnect entirely
+openclaw gateway status
 ```
-Wait a minute, then:
+should say it's running. Now completely close your terminal window (not
+just switch tabs — actually quit it), wait about a minute, then open a
+fresh terminal and reconnect:
 ```bash
 ssh openmt@YOUR_SERVER_IP
-openclaw gateway status   # should STILL show running
+openclaw gateway status
 ```
-If it does, the Gateway is genuinely 24/7 now — not dependent on you
-staying connected.
+If it still says running, your server is genuinely working 24/7 now, with
+nobody connected to it.
 
-## Step 8 — One security note for later, not now
+---
 
-`openclaw onboard` also starts a local Control UI on port 18789 — it's
-only reachable from the server itself, not from the internet, and it must
-stay that way. Never open port 18789 in the firewall. We don't need it for
-the Telegram-based flow this project is built around, so there's nothing
-to do here now — just don't be tempted to expose it "to check on things
-remotely" without an SSH tunnel.
+## Part 9 — Bring this project's files onto the server
 
-## Step 9 — Get this repo onto the server
+Still connected as `openmt`:
 
 ```bash
 git clone https://github.com/StephenNgo420/OpenMT.git
 cd OpenMT
 git checkout claude/openclaw-telegram-ai-company-2a38q1
 ```
+This copies everything we've built in this chat (the bot personalities,
+the guides, the settings template) onto the server itself.
 
-## Stop here for now
+---
 
-Same as before — don't wire in real secrets yet. Once you've also
-completed `02-telegram-bots-setup.md` and `03-provider-api-keys.md`, come
-back and we'll fill in the real config together, on this server, over SSH.
+## You can stop here
+
+Nothing past this point needs doing yet. When you're ready to continue,
+either keep going with the Telegram and API key guides, or just tell me
+you're stuck on any specific part above — including "I did Part 4 but I
+don't know what I'm looking at," that's a completely fine thing to say
+and I'll walk through it with you directly instead of pointing at the doc
+again.
