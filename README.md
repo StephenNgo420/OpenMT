@@ -143,6 +143,20 @@ OpenClaw routes that tool's calls through the same `model` field or a
 separate image-model config. Changing it blind risked silently breaking
 its core job — left on its direct connection until that's investigated.
 
+**Gotcha found during this round**: `openclaw agent --deliver` with
+`--reply-channel`/`--reply-to` overrides but no explicit `--reply-account`
+falls back to whatever Discord account was last resolved on the gateway
+for that channel, rather than the calling agent's own bound account
+(`accountId: opts.replyAccountId ?? opts.accountId` in
+`agent-command-ABV9I5el.js`). In practice this meant several of the initial
+test messages above went out under **CodingBot's** identity regardless of
+which agent actually generated the reply — the model routing itself was
+correct, only the Discord identity was wrong. Fixed by always passing
+`--reply-account <agentId>` explicitly; all 6 agents were re-tested with
+the fix and confirmed showing under their own correct bot identity in
+Discord. **Always pass `--reply-account` on any future CLI-driven
+`--deliver` test.**
+
 9router now runs as a systemd user service (`~/.config/systemd/user/9router.service`,
 same pattern as `openclaw-gateway.service`: `Restart=always`, lingering
 already enabled so it survives reboots and logouts without an active SSH
