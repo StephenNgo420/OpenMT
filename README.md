@@ -44,7 +44,7 @@ Important, because it's easy to get confused:
 | 4 | CoreBot routing (direct vs. delegate) | ✅ done — CoreBot delegates via OpenClaw's native `sessions_spawn` sub-agent mechanism: `agents.defaults.subagents.requireAgentId=true` plus a per-agent `allowAgents` list enforces the responsibility registry in `agents/core/AGENTS.md` at the config level (not just in prose). CoreBot's own `image_generate`/`video_generate` tools are denied (`agents.list[core].tools.deny`) so it structurally can't silently do PictureBot's job instead of delegating — that gap was found and fixed by live testing. Verified 2026-08-18: direct math question answered directly (no delegation); a finance question correctly spawned a properly structured `sessions_spawn` job packet to FinanceBot end-to-end; direct provider checks confirm FinanceBot/CodingBot/FileBot (Anthropic) and PictureBot's actual image generation (Google) all now succeed — the two provider issues below are resolved. |
 | 5 | Job IDs + Work Registry (includes the per-job cost ledger + `/usage` — see `docs/04-cost-and-token-discipline.md`) | ✅ core built and verified live — Work Registry daemon (`registry/`, systemd service `openmt-registry.service`) backs CoreBot's existing JOB ID convention with a real SQLite-backed lifecycle (created → in_progress → completed/failed), delivers deterministic zero-LLM completion messages to Discord, and exposes `/usage` via an MCP tool that CoreBot relays verbatim (no recomputation). Verified end-to-end: a live delegation, its completion message, and a live `/usage` request all landed correctly in Discord. **Known gap:** per-job specialist cost isn't reliably captured — see `registry/README.md` for why (confirmed not fixable via `cleanup: "keep"`). No budget enforcement yet (deliberately deferred — see docs/04). |
 | 6 | Visible delegation in the server | ✅ done — the Work Registry daemon posts each delegation's full lifecycle visibly in Discord, as the actually-relevant bot identity at each step (not just CoreBot relaying): CoreBot's "✅ Accepted / assigning to X" → the specialist's own "👋 X here — starting" → the specialist's own completion message with cost and an owner mention. Verified live end-to-end. The owner mention is a fixed Discord user ID (`OWNER_DISCORD_ID` env var) rather than the actual per-message author — recovering the real requester's ID wasn't possible from any data source checked (session transcripts, sessions index, gateway logs), and for this single-owner project that's an acceptable simplification. |
-| 7+ | State machine, history, versioning, resume, leases, fallback, commands, queueing, security, self-change governance, backups | ⬜ not started |
+| 7+ | State machine, history, versioning, resume, leases, fallback, commands, queueing, security, self-change governance, backups | ⬜ not started — except one real piece of self-change governance: CodingBot's HIGH/CRITICAL self-change operations now require an independent second opinion from `codex-review` before reaching the owner for approval. See the dated section below. Everything else in this bucket (state machine, versioning, resume, leases, queueing, backups) is still unbuilt. |
 
 We are deliberately not building stages 5+ until 2–4 work end-to-end with
 real Discord messages, per the project's own "don't overcomplicate the
@@ -182,6 +182,62 @@ end-to-end in Discord after the service came up. CoreBot still has no
 automatic fallback to its old direct connection if 9router's service
 itself is down — the rollback command above is the manual recovery path.
 
+### Independent Codex review gate for CodingBot self-change (2026-08-19)
+
+`agents/coding/AGENTS.md`'s 4-tier self-change risk system (LOW/MEDIUM/
+HIGH/CRITICAL) had been "target design, not yet enforced" since Stage 1.
+This is the first real enforcement of a piece of it: a new internal-only
+agent, `codex-review`, gives an independent second opinion before any
+HIGH or CRITICAL self-change operation reaches the owner for approval.
+This does not replace the owner-approval requirement — it's an additional
+gate. MEDIUM/LOW are unaffected.
+
+**`codex-review`**: no Discord binding, never posts to the server, only
+reachable via `sessions_spawn` and only by CodingBot
+(`agents.list[coding].subagents.allowAgents = ["codex-review"]`, `[]`
+before). Tools: `allow: ["read"]` only — no write/exec/`sessions_spawn`/
+anything else, and `subagents.allowAgents: []` — it cannot commission
+anyone, including CodingBot. Model: `ninerouter/openmt-codex-review`, a
+new OpenAI-only 9router combo (`cx/gpt-5.6-sol` → `openai/gpt-5.4`,
+deliberately never falling through to Claude/Gemini — the whole point is
+a model family CodingBot doesn't share).
+
+**Model-choice gotcha**: the actual OpenAI-branded "Codex" models
+(`gpt-5.3-codex`, `gpt-5.3-codex-spark`) are hardcoded OAuth-only in
+OpenClaw's provider code — confirmed by tracing `openai-provider-*.js`,
+not guessed — so they can't be reached via a plain API key regardless of
+config. Worse, `gpt-5.3-codex-spark` specifically also isn't usable on our
+actual ChatGPT account tier (tested live, got a 400 rejecting it — a plan
+limitation, separate from the OAuth-vs-API-key issue). `gpt-5.6-sol` is
+the newest generation that actually works on this account via the
+already-connected ChatGPT/Codex OAuth profile (the same one 9router's
+Tier 1 uses) — a real independent OpenAI model, just not literally
+branded "Codex."
+
+**Governance-file conflict found and resolved**: both `agents/coding/
+AGENTS.md` ("Loop prevention") and `agents/core/AGENTS.md` ("Delegation
+boundaries") state, in two cross-referenced places, that specialists never
+delegate directly to each other — everything routes through CoreBot. The
+requested design (CodingBot → `codex-review` directly) conflicts with that
+rule's letter, though not its spirit, since `codex-review` is a provably
+loop-safe leaf. Resolved (owner's choice) with a narrow, explicitly-scoped
+exception in both files: CodingBot may reach `codex-review` specifically,
+for this specific gate, and nothing else about the no-direct-delegation
+rule changed.
+
+**Verified live**: a real (non-`--deliver`, foreground) test — "design a
+plan to add a new Discord bot for a hypothetical LegalBot specialist,
+dry run only" — correctly classified as HIGH, correctly dispatched to
+`codex-review` via `sessions_spawn`, and codex-review returned a genuine
+`CONCERNS` verdict with six specific, substantive points (underspecified
+legal-safety boundaries, loose Discord permission scoping, vague
+credential handling, incomplete rollback disposition, missing negative
+tests) rather than rubber-stamping the design. CodingBot correctly
+surfaced both views without resolving the disagreement itself, and
+confirmed nothing was applied. Nothing about CoreBot or the other 5
+production specialists changed — verified programmatically (config diff),
+not just assumed.
+
 ## Repo layout
 
 ```
@@ -195,6 +251,8 @@ agents/
   file/       FileBot    — Word/Excel/PowerPoint creation & editing (model: Claude)
   marketing/  MarBot     — marketing/content/events (model: Gemini)
   research/   ResearchBot — quick web search & data gathering (model: Gemini)
+  codex-review/  internal-only — independent HIGH/CRITICAL review gate for
+                 CodingBot's self-change work (model: OpenAI, no Discord bot)
 docs/
   01-server-setup.md              provision the Hetzner VPS + install OpenClaw on it
   02-discord-bots-setup.md        create the 7 bots + company server in Discord's Developer Portal

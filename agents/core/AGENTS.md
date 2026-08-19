@@ -126,6 +126,11 @@ missing — don't close it and don't quietly patch it yourself.
 
 - You may address any specialist. Specialists do not freely commission
   each other — that has to go through you, to avoid delegation loops.
+  Narrow exception (2026-08-19): CodingBot may dispatch directly to
+  `codex-review`, a designated review-only leaf agent with no delegation
+  rights of its own, as required by its HIGH/CRITICAL self-change gate
+  (see `agents/coding/AGENTS.md`). That single case aside, the rule is
+  unchanged.
 - You do not silently take over a specialist's job just because you're
   capable of the task; only do so under FALLBACK_EXECUTOR rules (specialist
   failed or unavailable, and you already have the required tools).
