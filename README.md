@@ -68,7 +68,7 @@ time, in the foreground, never via a parallel/background sweep script.**
 The server has since been resized to Hetzner's CPX22 (2 vCPU / 4GB RAM),
 which gave real headroom back for running 9router alongside the gateway.
 
-### 9router fallback layer (2026-08-19) — CoreBot only, proven
+### 9router fallback layer (2026-08-19) — 6 of 7 agents live
 
 Added [9router](https://9router.com) as a local OpenAI-compatible proxy
 (`http://127.0.0.1:20128/v1`, loopback-only, no tunnel) providing a 3-tier
@@ -100,15 +100,48 @@ TLS-bypass and plaintext-storage issues are architectural to 9router
 itself and not something we can fix from the outside — known, accepted
 risk for this use case.
 
-**Only CoreBot is wired to it** (`agents.list[core].model` =
-`ninerouter/openmt-tier-fallback`, added as a custom provider under
-`models.providers.ninerouter` in `openclaw.json`). Verified 2026-08-19: a
-direct CLI turn and a live Discord message both answered correctly through
-`ninerouter/openmt-tier-fallback`, resolving to the Tier 1 ChatGPT
-subscription with no fallback needed. Rollback if 9router causes problems:
-`openclaw config set 'agents.list[1].model' 'openai/gpt-5.6'` (CoreBot's
-original direct OpenAI connection — index `1` in `agents.list`). The other
-6 agents are untouched and still on their direct provider connections.
+**CoreBot** was wired first as the test case (`agents.list[1].model` =
+`ninerouter/openmt-tier-fallback`). Verified 2026-08-19: a direct CLI turn
+and a live Discord message both answered correctly, resolving to the
+Tier 1 ChatGPT subscription with no fallback needed.
+
+Once CoreBot was proven, the same treatment was extended to the 5
+text-only specialists, one at a time (config change → CLI test → live
+Discord test → next agent), reusing the already-connected accounts —
+no new OAuth/API keys needed. Two additional combos were added so each
+agent's *original* model family stays first in its own fallback chain
+(same principle as CoreBot's ChatGPT-first ordering, matching its
+original direct OpenAI connection):
+
+- **`openmt-tier-fallback-claude`** (`cc` → `cx` → `anthropic` →
+  `openai` → `gemini` → `openrouter free`) — for the agents that were
+  originally on `anthropic/claude-opus-4-8` direct.
+- **`openmt-tier-fallback-gemini`** (`cc` → `cx` → `gemini` → `openai`
+  → `anthropic` → `openrouter free`) — for the agents that were
+  originally on `google/gemini-3.1-pro-preview` direct. (No Gemini
+  subscription is connected, so Tier 1 here is the same as the Claude
+  combo — Tier 2 is where the family match happens.)
+
+All three combos are registered under `models.providers.ninerouter` in
+`openclaw.json`. Current state, all verified live in Discord 2026-08-19:
+
+| Agent | `agents.list` index | Now on | Was on (rollback value) |
+|---|---|---|---|
+| core | 1 | `ninerouter/openmt-tier-fallback` | `openai/gpt-5.6` |
+| finance | 2 | `ninerouter/openmt-tier-fallback-claude` | `anthropic/claude-opus-4-8` |
+| coding | 4 | `ninerouter/openmt-tier-fallback-claude` | `anthropic/claude-opus-4-8` |
+| file | 5 | `ninerouter/openmt-tier-fallback-claude` | `anthropic/claude-opus-4-8` |
+| marketing | 6 | `ninerouter/openmt-tier-fallback-gemini` | `google/gemini-3.1-pro-preview` |
+| research | 7 | `ninerouter/openmt-tier-fallback-gemini` | `google/gemini-3.1-pro-preview` |
+| **picture** | 3 | **untouched** — still `google/gemini-3.1-pro-preview` direct | n/a |
+
+Rollback pattern for any agent: `openclaw config set 'agents.list[<index>].model' '<was-on value>'`.
+
+**PictureBot deliberately skipped**: it does real image generation
+(`image_generate` tool), not just chat, and it's not yet confirmed whether
+OpenClaw routes that tool's calls through the same `model` field or a
+separate image-model config. Changing it blind risked silently breaking
+its core job — left on its direct connection until that's investigated.
 
 9router now runs as a systemd user service (`~/.config/systemd/user/9router.service`,
 same pattern as `openclaw-gateway.service`: `Restart=always`, lingering
