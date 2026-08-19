@@ -58,17 +58,64 @@ at various points during Stage 3–4 testing today. All three are now
 confirmed working via direct provider-level checks and, for finance, a
 full CoreBot → `sessions_spawn` → FinanceBot round trip.
 
-### Server memory discipline (2026-08-18)
+### Server memory discipline (2026-08-18, resolved 2026-08-19)
 
-The Hetzner VPS this all runs on has 2GB RAM and no swap. A background
+The Hetzner VPS originally ran with 2GB RAM and no swap. A background
 script that tried to test multiple specialist agents in parallel via
 `sessions_spawn` OOM-killed the Claude Code process and some `node`
-processes mid-session. The gateway is a systemd user service and restarted
-itself cleanly, but the lesson: **test agents one at a time, in the
-foreground, never via a parallel/background sweep script.** A single
-`openclaw agent --agent <id> --message "..."` call is cheap enough (the
-gateway process gained ~50-70MB RSS per call, not cumulative); running
-several concurrently is what caused the crash.
+processes mid-session. Lesson carried forward: **test agents one at a
+time, in the foreground, never via a parallel/background sweep script.**
+The server has since been resized to Hetzner's CPX22 (2 vCPU / 4GB RAM),
+which gave real headroom back for running 9router alongside the gateway.
+
+### 9router fallback layer (2026-08-19) — CoreBot only, proven
+
+Added [9router](https://9router.com) as a local OpenAI-compatible proxy
+(`http://127.0.0.1:20128/v1`, loopback-only, no tunnel) providing a 3-tier
+fallback chain — combo `openmt-tier-fallback`:
+
+1. **Tier 1 (subscription):** ChatGPT Plus/Pro (`cx/gpt-5.5`) → Claude
+   Pro/Max (`cc/claude-sonnet-5`), connected via OAuth. Note: this uses
+   Anthropic's official Claude Code OAuth client with `org:create_api_key`
+   scope, which mints a real API key off the Pro/Max subscription — a
+   known ToS gray area for routing subscription usage through a
+   third-party proxy, accepted knowingly for this project.
+2. **Tier 2 (paid API keys):** `openai/gpt-5.4` → `anthropic/claude-opus-4-8`
+   → `gemini/gemini-3.1-pro-preview` — the same keys already used directly
+   elsewhere in this config.
+3. **Tier 3 (free):** `openrouter/google/gemma-4-31b-it:free`.
+
+A pre-publish security audit of 9router (StationX, July 2026) found several
+HIGH-severity issues — TLS verification disabled when forwarding to
+providers, plaintext credential storage, a trivially-reversible admin
+password derivation, and a `123456` default password granting real
+sessions. Mitigated what's under our control: real dashboard password set
+(`~/.openclaw/9router-dashboard-password.txt`, mode 600), bound to
+127.0.0.1 only, no tunnel/remote-sharing enabled, `--skip-update` (no
+unsigned auto-update), and a local patch to `hooks/sqliteRuntime.js` so it
+never shells out to `node-gyp`/`cc1` to compile `better-sqlite3` from
+source (uses Node's built-in `node:sqlite` instead — that native compile
+was the direct trigger for an OOM on the pre-resize 2GB box). The
+TLS-bypass and plaintext-storage issues are architectural to 9router
+itself and not something we can fix from the outside — known, accepted
+risk for this use case.
+
+**Only CoreBot is wired to it** (`agents.list[core].model` =
+`ninerouter/openmt-tier-fallback`, added as a custom provider under
+`models.providers.ninerouter` in `openclaw.json`). Verified 2026-08-19: a
+direct CLI turn and a live Discord message both answered correctly through
+`ninerouter/openmt-tier-fallback`, resolving to the Tier 1 ChatGPT
+subscription with no fallback needed. Rollback if 9router causes problems:
+`openclaw config set 'agents.list[1].model' 'openai/gpt-5.6'` (CoreBot's
+original direct OpenAI connection — index `1` in `agents.list`). The other
+6 agents are untouched and still on their direct provider connections.
+
+9router itself is not a systemd service yet — started manually
+(`9router -H 127.0.0.1 -p 20128 --no-browser --skip-update --log`) and
+does not survive a reboot on its own (confirmed: it needed a manual
+restart after the CPX22 resize reboot). CoreBot will fail if 9router isn't
+running, since its config points at it directly with no fallback to the
+old direct connection.
 
 ## Repo layout
 
