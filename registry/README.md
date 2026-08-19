@@ -1,10 +1,11 @@
-# OpenMT Work Registry (Stage 5)
+# OpenMT Work Registry (Stages 5 & 6)
 
 A small, purely-mechanical daemon that gives Job IDs and delegation a real
 persistent backing (per `agents/core/AGENTS.md`'s note that they were
-"illustrative, not yet backed by a database" until this stage), and tracks
+"illustrative, not yet backed by a database" until this stage), tracks
 per-call cost against a Work Registry per
-`docs/04-cost-and-token-discipline.md`.
+`docs/04-cost-and-token-discipline.md` (Stage 5), and makes each
+delegation's full lifecycle visible in Discord as it happens (Stage 6).
 
 No LLM calls happen anywhere in this daemon. It works entirely by tailing
 OpenClaw's own session `.jsonl` files and reading data OpenClaw already
@@ -24,12 +25,28 @@ computes (per-turn token counts and dollar cost).
   terminal reply after a spawn+`sessions_yield` — this is the reliable
   signal (see "Known limitation" below for why the child session itself
   isn't).
-- **Zero-LLM Discord delivery** of the completion message, via `openclaw
-  message send` (bypasses the agent/LLM entirely).
-- A safety guard (`LIVE_DELIVERY_WINDOW_MS`) so backfilling old session
-  history on startup/restart never sends live Discord notifications for
-  jobs that actually finished long ago — they're still recorded correctly
-  in the DB, just not (re-)delivered.
+- **Zero-LLM Discord delivery**, via `openclaw message send` (bypasses the
+  agent/LLM entirely), of the **full visible-delegation pipeline (Stage
+  6)**: CoreBot posts "✅ Accepted `job_id` — assigning to X" the moment a
+  job is created; the specialist's *own* Discord identity posts "👋 X here
+  — starting `job_id`" once the child session is confirmed; and the
+  specialist's own identity posts the completion (result + cost),
+  `@mention`-ing the project owner. Posting as the specialist rather than
+  having CoreBot relay everything is the actual point of "visible
+  delegation" — verified live end-to-end, all three messages, correct
+  bots, correct order.
+  - The owner mention (`OWNER_DISCORD_MENTION`, from `OWNER_DISCORD_ID` env
+    var) is a **fixed** Discord user ID, not the real per-message
+    requester — that ID isn't recoverable from any data source checked
+    (session transcripts, sessions index, gateway logs). Fine for a
+    single-owner project; would need real author-ID capture to generalize.
+  - Each `openclaw message send` call has real CLI startup overhead
+    (observed ~40s for the first message in a batch) — not instant, but
+    correctly ordered once it lands.
+- A safety guard (`LIVE_DELIVERY_WINDOW_MS`, applies to all three message
+  types) so backfilling old session history on startup/restart never sends
+  live Discord notifications for jobs that actually finished long ago —
+  they're still recorded correctly in the DB, just not (re-)delivered.
 
 **Known limitation — per-job specialist cost is not reliably captured.**
 A spawned child session gets created, does its work, and is deleted
@@ -99,8 +116,11 @@ returned the correct report.
 
 ```
 node registry/daemon.js          # foreground; or: systemctl --user start openmt-registry.service
-REGISTRY_DB_PATH=/path/to.sqlite node registry/daemon.js   # custom DB path
+REGISTRY_DB_PATH=/path/to.sqlite OWNER_DISCORD_ID=123... node registry/daemon.js
 ```
+
+`OWNER_DISCORD_ID` (numeric Discord user ID, no `<@>`) is optional — if
+unset, completion messages just skip the mention rather than failing.
 
 The MCP server (`mcp-server.js`) isn't run directly — OpenClaw spawns it
 itself per the `mcp.servers` config entry when an agent needs it.

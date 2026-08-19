@@ -10,6 +10,14 @@ const { execFile } = require("node:child_process");
 const db = require("./db");
 const { parseLine } = require("./parser");
 const { loadSessionKeyIndex, parseDiscordChannelFromKey, AGENTS_DIR } = require("./session-keys");
+const { displayName } = require("./usage-format");
+
+// Stage 6: visible delegation pipeline. This is always the project owner
+// regardless of who technically sent the Discord message — there's no
+// reliable way to recover the actual message author's Discord user ID
+// from session data (checked; not present in session transcripts, sessions
+// index, or gateway logs), and for this single-owner project that's fine.
+const OWNER_DISCORD_MENTION = process.env.OWNER_DISCORD_ID ? `<@${process.env.OWNER_DISCORD_ID}>` : "";
 
 const DB_PATH = process.env.REGISTRY_DB_PATH || "/home/OpenMT/OpenMT/registry/registry.sqlite";
 const POLL_MS = 500; // fast enough to catch short-lived child sessions before cleanup:delete removes them
@@ -100,14 +108,14 @@ function readNewLines(filePath) {
   return { lines, newOffset };
 }
 
-function deliverMessage({ account, target, message }) {
+function deliverMessage({ account, target, message, label }) {
   execFile(
     "openclaw",
     ["message", "send", "--channel", "discord", "--account", account, "--target", target, "--message", message],
     { env: { ...process.env, PATH: `${process.env.PATH}:/home/OpenMT/.npm-global/bin` } },
     (err, stdout, stderr) => {
-      if (err) log("delivery FAILED:", account, target, err.message, stderr);
-      else log("delivered completion message to", account, target);
+      if (err) log("delivery FAILED:", label || "", account, target, err.message, stderr);
+      else log("delivered", label || "message", "as", account, "to", target);
     }
   );
 }
@@ -118,8 +126,21 @@ function deliverMessage({ account, target, message }) {
 // a real delivery; older ones still get recorded correctly in the DB.
 const LIVE_DELIVERY_WINDOW_MS = 5 * 60 * 1000;
 
+function isRecent(createdAtIso) {
+  return Date.now() - new Date(createdAtIso).getTime() <= LIVE_DELIVERY_WINDOW_MS;
+}
+
+function formatAcceptAssignMessage(job) {
+  return `✅ Accepted \`${job.job_id}\`${job.task_type ? ` — ${job.task_type}` : ""}. Assigning to ${displayName(job.prefix)}.`;
+}
+
+function formatSpecialistAcceptMessage(job) {
+  return `👋 ${displayName(job.assigned_agent)} here — starting \`${job.job_id}\`.`;
+}
+
 function formatCompletionMessage(jobId, oneLiner, totalCost) {
-  return `✅ ${jobId.toUpperCase()} completed.\n${oneLiner}\n💰 $${totalCost.toFixed(4)} used`;
+  const mention = OWNER_DISCORD_MENTION ? ` ${OWNER_DISCORD_MENTION}` : "";
+  return `✅ ${jobId.toUpperCase()} completed.\n${oneLiner}\n💰 $${totalCost.toFixed(4)} used${mention}`;
 }
 
 function truncateOneLiner(text) {
@@ -147,9 +168,12 @@ function processEvent(agentId, sessionId, event) {
       const createdJob = db.findJobByToolCallId(database, event.toolCallId);
       if (createdJob) {
         const parentMeta = sessionKeyIndex.get(sessionId);
-        if (parentMeta) {
-          const discord = parseDiscordChannelFromKey(parentMeta.sessionKey);
-          if (discord) db.setJobRequester(database, createdJob.id, discord.target, discord.account);
+        const discord = parentMeta ? parseDiscordChannelFromKey(parentMeta.sessionKey) : null;
+        if (discord) {
+          db.setJobRequester(database, createdJob.id, discord.target, discord.account);
+          if (isRecent(createdJob.created_at)) {
+            deliverMessage({ account: "core", target: discord.target, message: formatAcceptAssignMessage(createdJob), label: "accept/assign" });
+          }
         }
       }
       log("job created:", event.jobId, `(row ${createdJob ? createdJob.id : "?"})`);
@@ -158,14 +182,23 @@ function processEvent(agentId, sessionId, event) {
     case "spawn_result": {
       const job = db.findJobByToolCallId(database, event.toolCallId);
       if (!job) return;
+      const assignedAgent = event.childSessionKey.split(":")[1];
       db.markJobInProgress(database, job.id, {
-        assignedAgent: event.childSessionKey.split(":")[1],
+        assignedAgent,
         childSessionKey: event.childSessionKey,
         runId: event.runId,
       });
       const childFile = findChildSessionFile(event.childSessionKey);
-      if (childFile) watchedFiles.set(childFile, { agentId: event.childSessionKey.split(":")[1], sessionId: event.childSessionKey.split(":").pop() });
+      if (childFile) watchedFiles.set(childFile, { agentId: assignedAgent, sessionId: event.childSessionKey.split(":").pop() });
       log("job in_progress:", job.job_id, `(row ${job.id})`, "->", event.childSessionKey);
+      if (job.requester_channel && isRecent(job.created_at)) {
+        deliverMessage({
+          account: assignedAgent,
+          target: job.requester_channel,
+          message: formatSpecialistAcceptMessage({ ...job, assigned_agent: assignedAgent }),
+          label: "specialist-accept",
+        });
+      }
       break;
     }
     case "spawn_rejected": {
@@ -205,16 +238,18 @@ function processEvent(agentId, sessionId, event) {
       const oneLiner = truncateOneLiner(event.text);
       db.completeJob(database, job.id, oneLiner);
       log("job completed:", job.job_id, `(row ${job.id})`, `$${totalCost.toFixed(4)}`);
-      const jobAgeMs = Date.now() - new Date(job.created_at).getTime();
-      if (!job.requester_channel || !job.requester_account) {
+      if (!job.requester_channel) {
         log("job", job.job_id, "has no requester channel (non-Discord session) — skipping delivery");
-      } else if (jobAgeMs > LIVE_DELIVERY_WINDOW_MS) {
-        log("job", job.job_id, "is backfilled history (age", Math.round(jobAgeMs / 1000), "s) — recorded but not delivering live");
+      } else if (!isRecent(job.created_at)) {
+        log("job", job.job_id, "is backfilled history (age", Math.round((Date.now() - new Date(job.created_at).getTime()) / 1000), "s) — recorded but not delivering live");
       } else {
+        // Posted as the specialist's own Discord identity, not CoreBot —
+        // that's the whole point of "visible delegation" (Stage 6).
         deliverMessage({
-          account: job.requester_account,
+          account: job.assigned_agent || job.requester_account,
           target: job.requester_channel,
           message: formatCompletionMessage(job.job_id, oneLiner, totalCost),
+          label: "completion",
         });
       }
       break;
