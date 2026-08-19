@@ -68,7 +68,7 @@ time, in the foreground, never via a parallel/background sweep script.**
 The server has since been resized to Hetzner's CPX22 (2 vCPU / 4GB RAM),
 which gave real headroom back for running 9router alongside the gateway.
 
-### 9router fallback layer (2026-08-19) — 6 of 7 agents live
+### 9router fallback layer (2026-08-19) — all 7 agents live
 
 Added [9router](https://9router.com) as a local OpenAI-compatible proxy
 (`http://127.0.0.1:20128/v1`, loopback-only, no tunnel) providing a 3-tier
@@ -133,15 +133,30 @@ All three combos are registered under `models.providers.ninerouter` in
 | file | 5 | `ninerouter/openmt-tier-fallback-claude` | `anthropic/claude-opus-4-8` |
 | marketing | 6 | `ninerouter/openmt-tier-fallback-gemini` | `google/gemini-3.1-pro-preview` |
 | research | 7 | `ninerouter/openmt-tier-fallback-gemini` | `google/gemini-3.1-pro-preview` |
-| **picture** | 3 | **untouched** — still `google/gemini-3.1-pro-preview` direct | n/a |
+| picture | 3 | `ninerouter/openmt-tier-fallback-gemini` | `google/gemini-3.1-pro-preview` |
 
-Rollback pattern for any agent: `openclaw config set 'agents.list[<index>].model' '<was-on value>'`.
+**All 7 agents are now on 9router.** Rollback pattern for any agent:
+`openclaw config set 'agents.list[<index>].model' '<was-on value>'`.
 
-**PictureBot deliberately skipped**: it does real image generation
-(`image_generate` tool), not just chat, and it's not yet confirmed whether
-OpenClaw routes that tool's calls through the same `model` field or a
-separate image-model config. Changing it blind risked silently breaking
-its core job — left on its direct connection until that's investigated.
+**PictureBot investigation (2026-08-19)**: confirmed via OpenClaw's source
+(`provider-capabilities-CYpG67go.js`, `openclaw-tools-KulZ1cdH.js`,
+`runtime-Da0CzszU.js`) that `image_generate` is fully decoupled from an
+agent's own `model` field — it resolves through a separate, config-wide
+`agents.defaults.imageGenerationModel` (currently unset, so it
+auto-discovers an image-capable provider from the whole config — the
+direct Google connection, since `ninerouter`'s registered models aren't
+declared image-capable and are never candidates). So changing PictureBot's
+`model` only affects its text/tool-calling; image generation itself was
+never at risk, confirmed by a real Discord image-generation request
+completing correctly after the switch.
+
+Side note on testing async tools: `image_generate` runs as a background
+task — the tool call returns immediately ("wait for the completion
+event"), and the actual image + final reply land later via a separate
+callback. A one-shot `openclaw agent --deliver` CLI call can exit before
+that callback arrives (shows as `deliveryStatus: suppressed`, not an
+error) — the always-running gateway handles real Discord messages fine;
+only the synthetic single-shot CLI test doesn't stick around for it.
 
 **Gotcha found during this round**: `openclaw agent --deliver` with
 `--reply-channel`/`--reply-to` overrides but no explicit `--reply-account`
@@ -196,6 +211,7 @@ not `agents/<id>/workspace/` as earlier drafts of this README assumed).
 
 ## What to do next (you)
 
-Stage 4 is done and all three provider issues are resolved — nothing is
-blocked on you right now. Say the word when you want to start Stage 5
-(Job IDs + Work Registry).
+Stage 4 is done, all three original provider issues are resolved, and the
+9router fallback layer is live on all 7 agents — nothing is blocked on you
+right now. Say the word when you want to start Stage 5 (Job IDs + Work
+Registry).
