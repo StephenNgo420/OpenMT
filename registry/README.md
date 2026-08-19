@@ -33,17 +33,35 @@ computes (per-turn token counts and dollar cost).
 
 **Known limitation — per-job specialist cost is not reliably captured.**
 A spawned child session gets created, does its work, and is deleted
-(`cleanup` param on `sessions_spawn`) — sometimes within one second.
-Verified: this happens **even when CoreBot passes `cleanup: "keep"`**, so
-it isn't a config knob under our control from the outside. Polling (tried
-down to 500ms) and `fs.watch`/inotify (near-zero latency) both lose this
-race for fast jobs. Completion messages currently show the true dollar
-figure captured before the race was lost — often $0.00 for fast jobs, even
-though the specialist really did cost something. CoreBot's *own* routing
-cost (the spawn/yield/relay turns, which live in CoreBot's own
-never-deleted session) **is** captured correctly. Fixing this properly
-would need investigating what actually controls that deletion inside
-OpenClaw's closed-source subagent lifecycle — out of scope for this pass.
+(`cleanup` param on `sessions_spawn`). Investigated properly (2026-08-19),
+not just assumed:
+
+1. `cleanup: "keep"` does **not** prevent deletion — verified twice with
+   real jobs (`finance_registry_test_001`/`002`), file gone regardless of
+   the param CoreBot actually passed. Not a config knob we control.
+2. Polling (down to 500ms) and `fs.watch`/inotify (near-zero latency in
+   principle) both lose the race — but it's not actually a *speed*
+   problem: a controlled test confirmed `fs.watch` on the target directory
+   fires **zero events** for a real child session's entire lifecycle, even
+   though `fs.watch` itself works correctly on this filesystem (verified
+   with a synthetic write/delete of our own). The file's externally
+   observable window on disk is at or near zero — most likely an
+   open-then-unlink pattern internal to OpenClaw's cleanup, not something
+   any external polling/watching frequency can catch.
+3. OpenClaw maintains a separate internal "subagent registry"
+   (`resolveSubagentRegistryPath()` → `<state>/subagents/runs.json` in
+   `subagent-registry-state-*.js`) that could plausibly retain data past
+   session deletion — but it doesn't exist on disk on this deployment, so
+   it's not an available data source either.
+
+Completion messages currently show $0.00 for the specialist's actual work
+even though it really did cost something. CoreBot's *own* routing cost
+(the spawn/yield/relay turns, which live in CoreBot's own never-deleted
+session) **is** captured correctly. A real fix would mean getting inside
+OpenClaw's own process — a plugin/hook intercepting subagent completion
+before cleanup runs — rather than external log-tailing. That's a
+materially bigger project, out of scope here; parked, not being chased
+further for now (see main README Stage 5/6 status).
 
 **`/usage` — done.** MCP server (`mcp-server.js`) exposes one tool,
 `work_registry_query_usage(scope, filter)`, registered in `openclaw.json`
