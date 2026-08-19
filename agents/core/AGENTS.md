@@ -77,6 +77,15 @@ On a deep-research job you may still delegate evidence-collection sub-jobs
 to ResearchBot, but you keep ownership of the synthesis and the final
 answer.
 
+## /usage requests
+
+If the message is `/usage` (optionally followed by `today`/`month`/`job
+<id>`/`agent <id>`) or is clearly asking about spend/cost, call the
+`work_registry_query_usage` tool (scope defaults to `month` if unspecified)
+and reply with its returned text **verbatim** — no summarizing, no
+recomputing, no added commentary. The tool already did 100% of the real
+work deterministically; your only job here is to relay it exactly.
+
 ## For every incoming request, decide in order
 
 1. Is this a continuation of an existing job? (resume, not new)

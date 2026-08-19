@@ -45,9 +45,24 @@ never-deleted session) **is** captured correctly. Fixing this properly
 would need investigating what actually controls that deletion inside
 OpenClaw's closed-source subagent lifecycle — out of scope for this pass.
 
+**`/usage` — done.** MCP server (`mcp-server.js`) exposes one tool,
+`work_registry_query_usage(scope, filter)`, registered in `openclaw.json`
+under `mcp.servers.openmt-work-registry`. `agents/core/AGENTS.md` instructs
+CoreBot to call it on any `/usage`-style request and relay the result
+**verbatim** — the tool does 100% of the real computation (pure SQL read +
+deterministic formatting in `usage-format.js`), CoreBot's cheap-tier LLM
+call is routing only. Verified live: a real `/usage` message in Discord
+returned the correct report.
+
+**Running as a systemd service.** `openmt-registry.service`
+(`~/.config/systemd/user/`), same `Restart=always` + lingering pattern as
+`openclaw-gateway.service`/`9router.service`. DB lives at
+`registry/registry.sqlite` (gitignored — operational data, not source).
+
 ## Files
 
-- `db.js` — SQLite schema (`node:sqlite`, no native deps) + query helpers.
+- `db.js` — SQLite schema (`node:sqlite`, no native deps) + query helpers,
+  including the `/usage` read queries (`usageByAgentProvider`, etc.).
 - `parser.js` — pure functions parsing session `.jsonl` lines into events.
   No I/O, no state — fully unit-testable.
 - `session-keys.js` — maps a session file's UUID back to its session key
@@ -56,20 +71,21 @@ OpenClaw's closed-source subagent lifecycle — out of scope for this pass.
   in on.
 - `daemon.js` — the long-running process: tails every agent's session
   files, correlates events, drives job lifecycle, delivers completions.
+- `usage-format.js` — deterministic text formatting for `/usage` reports.
+- `mcp-server.js` — the MCP server exposing `work_registry_query_usage`
+  (stdio transport, spawned by OpenClaw per `mcp.servers` config).
 - `test-replay.js` — offline test harness; replays real session files
   already on disk through the parser (no live agent calls needed).
 
 ## Running
 
 ```
-node registry/daemon.js          # foreground
+node registry/daemon.js          # foreground; or: systemctl --user start openmt-registry.service
 REGISTRY_DB_PATH=/path/to.sqlite node registry/daemon.js   # custom DB path
 ```
 
-Not yet installed as a systemd service — do that (same `Restart=always` +
-lingering pattern as `openclaw-gateway.service`/`9router.service`) before
-relying on this for real, and before building the `/usage` MCP tool on
-top of it (Stage 5 plan, step 3).
+The MCP server (`mcp-server.js`) isn't run directly — OpenClaw spawns it
+itself per the `mcp.servers` config entry when an agent needs it.
 
 ## Schema
 

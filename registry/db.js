@@ -137,6 +137,34 @@ function sumJobCost(db, rowId) {
   return row.total;
 }
 
+// Spend grouped by agent+provider within a date window. `since` is an
+// ISO8601 string (inclusive); pass null for all-time.
+function usageByAgentProvider(db, since) {
+  const query = since
+    ? `SELECT agent_id, provider, SUM(cost_usd) AS total, COUNT(*) AS calls FROM usage_log WHERE timestamp >= ? GROUP BY agent_id, provider ORDER BY total DESC`
+    : `SELECT agent_id, provider, SUM(cost_usd) AS total, COUNT(*) AS calls FROM usage_log GROUP BY agent_id, provider ORDER BY total DESC`;
+  return since ? db.prepare(query).all(since) : db.prepare(query).all();
+}
+
+function usageTotal(db, since) {
+  const query = since
+    ? `SELECT COALESCE(SUM(cost_usd), 0) AS total, COUNT(*) AS calls FROM usage_log WHERE timestamp >= ?`
+    : `SELECT COALESCE(SUM(cost_usd), 0) AS total, COUNT(*) AS calls FROM usage_log`;
+  return since ? db.prepare(query).get(since) : db.prepare(query).get();
+}
+
+function findJobByLabel(db, jobId) {
+  // Most recent match — job_id labels aren't globally unique (see README).
+  return db.prepare(`SELECT * FROM jobs WHERE job_id = ? ORDER BY id DESC LIMIT 1`).get(jobId);
+}
+
+function usageForAgent(db, agentId, since) {
+  const query = since
+    ? `SELECT provider, SUM(cost_usd) AS total, COUNT(*) AS calls FROM usage_log WHERE agent_id = ? AND timestamp >= ? GROUP BY provider ORDER BY total DESC`
+    : `SELECT provider, SUM(cost_usd) AS total, COUNT(*) AS calls FROM usage_log WHERE agent_id = ? GROUP BY provider ORDER BY total DESC`;
+  return since ? db.prepare(query).all(agentId, since) : db.prepare(query).all(agentId);
+}
+
 function getTailOffset(db, filePath) {
   const row = db.prepare(`SELECT byte_offset FROM tail_offsets WHERE file_path = ?`).get(filePath);
   return row ? row.byte_offset : 0;
@@ -152,4 +180,5 @@ function setTailOffset(db, filePath, offset) {
 module.exports = {
   openDb, insertJob, findJobByToolCallId, findLatestInProgressJobByParentSession, markJobInProgress, markJobFailed,
   setJobRequester, findJobByChildSessionKey, completeJob, insertUsage, sumJobCost, getTailOffset, setTailOffset,
+  usageByAgentProvider, usageTotal, findJobByLabel, usageForAgent,
 };

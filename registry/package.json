@@ -1,0 +1,11 @@
+{
+  "name": "openmt-work-registry",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OpenMT Stage 5: Work Registry daemon + MCP usage-query tool",
+  "main": "daemon.js",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3"
+  }
+}
