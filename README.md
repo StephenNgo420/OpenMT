@@ -110,12 +110,15 @@ subscription with no fallback needed. Rollback if 9router causes problems:
 original direct OpenAI connection — index `1` in `agents.list`). The other
 6 agents are untouched and still on their direct provider connections.
 
-9router itself is not a systemd service yet — started manually
-(`9router -H 127.0.0.1 -p 20128 --no-browser --skip-update --log`) and
-does not survive a reboot on its own (confirmed: it needed a manual
-restart after the CPX22 resize reboot). CoreBot will fail if 9router isn't
-running, since its config points at it directly with no fallback to the
-old direct connection.
+9router now runs as a systemd user service (`~/.config/systemd/user/9router.service`,
+same pattern as `openclaw-gateway.service`: `Restart=always`, lingering
+already enabled so it survives reboots and logouts without an active SSH
+session). Verified 2026-08-19: service starts clean, the one-time
+`better-sqlite3` install attempt runs harmlessly under `--ignore-scripts`
+(no compile, exits on its own), and CoreBot answered correctly through it
+end-to-end in Discord after the service came up. CoreBot still has no
+automatic fallback to its old direct connection if 9router's service
+itself is down — the rollback command above is the manual recovery path.
 
 ## Repo layout
 
