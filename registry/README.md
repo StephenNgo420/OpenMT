@@ -1,4 +1,4 @@
-# OpenMT Work Registry (Stages 5 & 6)
+# OpenMT Work Registry (Stages 5, 6 & 7)
 
 A small, purely-mechanical daemon that gives Job IDs and delegation a real
 persistent backing (per `agents/core/AGENTS.md`'s note that they were
@@ -94,6 +94,86 @@ returned the correct report.
 `openclaw-gateway.service`/`9router.service`. DB lives at
 `registry/registry.sqlite` (gitignored — operational data, not source).
 
+## Stage 7 (2026-08-20): state machine + history, crash recovery, backups
+
+Three pieces added on top of the Stage 5/6 daemon, no changes to the
+event parser or the visible-delegation pipeline itself:
+
+**State machine + history.** Every status transition (`created` →
+`in_progress` → `completed`/`failed`/`orphaned`) is now logged to a new
+`job_events` table (`job_row_id, from_status, to_status, note,
+timestamp`) via a single `db.recordEvent()` helper called from every
+function that mutates `jobs.status`. `jobs.status` itself is unchanged as
+the fast-path current-state column — `job_events` is purely additive
+history, queryable with `db.jobHistory(db, rowId)`. Existing (pre-Stage-7)
+jobs have no history rows, since they were never re-processed — only new
+transitions get logged going forward.
+
+**Crash recovery.** Two real gaps, closed:
+
+1. *Daemon downtime causing missed Discord notifications.* The old
+   Stage 6 logic delivered a live message only if a job was created within
+   a fixed 5-minute wall-clock window — correct for the cold-start backfill
+   case it was built for, but wrong for a real outage: anything that
+   finished more than 5 minutes into a longer outage would get recorded in
+   the DB but never actually delivered to Discord. Replaced with a
+   heartbeat: the daemon writes `last_heartbeat_at` to a new `daemon_state`
+   key/value table every 10s and once more on clean shutdown (SIGTERM/
+   SIGINT). On startup it reads the *previous* run's last heartbeat and
+   uses it as a fixed cutoff for the rest of that process's life — anything
+   at/before it is backfill (recorded, not redelivered); anything after it
+   gets delivered, however long the daemon was actually down. A clean
+   restart (deploy, manual restart) writes a fresh heartbeat right before
+   exiting, so the next boot's catch-up window is ~0 — only a real crash
+   (no time to run the shutdown handler) leaves a stale heartbeat and
+   triggers genuine catch-up delivery. Verified live: a normal
+   `systemctl --user restart` produced a cutoff essentially equal to "now",
+   not a stale one.
+2. *Jobs the pipeline loses track of.* A specialist session can die, or
+   the daemon can restart mid-job, leaving a job stuck in `created` or
+   `in_progress` forever with nothing left to ever generate a completion
+   event. A new sweep (`sweepStaleJobs`, every 60s) finds jobs older than
+   `STALE_JOB_MS` (20 min, tunable) still sitting in those states, marks
+   them `orphaned` (a new terminal-but-uncertain status — distinct from
+   `failed`, since the real outcome is unknown) with a `job_events` row,
+   and — only if the job is "recent" by the same heartbeat-cutoff logic —
+   posts a `⚠️` notice so the owner isn't left silently wondering. Verified
+   live against two genuinely stuck jobs left over from 2026-08-18 testing
+   (`mkt_001`, `coding_001` — pre-dating the cost-capture investigation
+   that explains why child sessions vanish before completion is ever
+   observed): both got swept, marked `orphaned`, logged to `job_events`,
+   and correctly did **not** trigger a live Discord notification, since
+   they're old backfill relative to the heartbeat cutoff, not something
+   that happened during this process's life.
+
+**Backups.** `backup.js` — a oneshot script, not part of the daemon — run
+daily by `openmt-backup.timer` (systemd user timer, `OnCalendar=daily`,
+`Persistent=true` so a missed run due to downtime still fires on next
+boot) via `openmt-backup.service`. Backs up two things nothing else
+protects:
+- The registry SQLite DB, via `DatabaseSync(..., {readOnly:true}).serialize()`
+  — a consistent point-in-time snapshot safe to take while the daemon has
+  the same file open in WAL mode (verified live, no lock conflicts).
+- `openclaw.json` (live routing/model config + provider credentials) — not
+  in git by design, so this is its only backup; recoverable now beyond
+  just the dry-run discipline already practiced for config changes.
+
+Both land in `~/openmt-backups/<timestamp>/`, mode `0700`. Retention:
+last 14 daily backups kept (`OPENMT_BACKUP_RETENTION`), oldest pruned
+automatically. Verified live: `systemctl --user start
+openmt-backup.service` produced a real snapshot, both files present,
+readable back with a fresh `DatabaseSync` connection.
+
+**Known limitation, unchanged from Stage 5:** per-job specialist cost
+capture is still not reliably possible (see above) — this stage doesn't
+touch that.
+
+**Not covered by this stage** (still open Stage 7+ items): a formal job
+resume/retry mechanism (an `orphaned` job is flagged, not automatically
+retried), leases, queueing, versioning, or any new Discord commands for
+querying `job_events`/history directly (it's there in SQL if needed, but
+nothing surfaces it via `/usage` or a new command yet).
+
 ## Files
 
 - `db.js` — SQLite schema (`node:sqlite`, no native deps) + query helpers,
@@ -111,6 +191,8 @@ returned the correct report.
   (stdio transport, spawned by OpenClaw per `mcp.servers` config).
 - `test-replay.js` — offline test harness; replays real session files
   already on disk through the parser (no live agent calls needed).
+- `backup.js` — oneshot Stage 7 backup script (registry DB + openclaw.json),
+  run by `openmt-backup.timer`/`.service`, not the long-running daemon.
 
 ## Running
 

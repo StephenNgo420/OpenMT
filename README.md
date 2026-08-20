@@ -44,7 +44,7 @@ Important, because it's easy to get confused:
 | 4 | CoreBot routing (direct vs. delegate) | ✅ done — CoreBot delegates via OpenClaw's native `sessions_spawn` sub-agent mechanism: `agents.defaults.subagents.requireAgentId=true` plus a per-agent `allowAgents` list enforces the responsibility registry in `agents/core/AGENTS.md` at the config level (not just in prose). CoreBot's own `image_generate`/`video_generate` tools are denied (`agents.list[core].tools.deny`) so it structurally can't silently do PictureBot's job instead of delegating — that gap was found and fixed by live testing. Verified 2026-08-18: direct math question answered directly (no delegation); a finance question correctly spawned a properly structured `sessions_spawn` job packet to FinanceBot end-to-end; direct provider checks confirm FinanceBot/CodingBot/FileBot (Anthropic) and PictureBot's actual image generation (Google) all now succeed — the two provider issues below are resolved. |
 | 5 | Job IDs + Work Registry (includes the per-job cost ledger + `/usage` — see `docs/04-cost-and-token-discipline.md`) | ✅ core built and verified live — Work Registry daemon (`registry/`, systemd service `openmt-registry.service`) backs CoreBot's existing JOB ID convention with a real SQLite-backed lifecycle (created → in_progress → completed/failed), delivers deterministic zero-LLM completion messages to Discord, and exposes `/usage` via an MCP tool that CoreBot relays verbatim (no recomputation). Verified end-to-end: a live delegation, its completion message, and a live `/usage` request all landed correctly in Discord. **Known gap:** per-job specialist cost isn't reliably captured — see `registry/README.md` for why (confirmed not fixable via `cleanup: "keep"`). No budget enforcement yet (deliberately deferred — see docs/04). |
 | 6 | Visible delegation in the server | ✅ done — the Work Registry daemon posts each delegation's full lifecycle visibly in Discord, as the actually-relevant bot identity at each step (not just CoreBot relaying): CoreBot's "✅ Accepted / assigning to X" → the specialist's own "👋 X here — starting" → the specialist's own completion message with cost and an owner mention. Verified live end-to-end. The owner mention is a fixed Discord user ID (`OWNER_DISCORD_ID` env var) rather than the actual per-message author — recovering the real requester's ID wasn't possible from any data source checked (session transcripts, sessions index, gateway logs), and for this single-owner project that's an acceptable simplification. |
-| 7+ | State machine, history, versioning, resume, leases, fallback, commands, queueing, security, self-change governance, backups | ⬜ not started — except one real piece of self-change governance: CodingBot's HIGH/CRITICAL self-change operations now require an independent second opinion from `codex-review` before reaching the owner for approval. See the dated section below. Everything else in this bucket (state machine, versioning, resume, leases, queueing, backups) is still unbuilt. |
+| 7+ | State machine, history, versioning, resume, leases, fallback, commands, queueing, security, self-change governance, backups | 🟨 partial — done: self-change governance (`codex-review` gate on CodingBot's HIGH/CRITICAL ops); job state machine + history (`job_events` audit table); crash recovery (heartbeat-based catch-up + stale-job sweep marking lost jobs `orphaned`); daily backups of the registry DB + `openclaw.json` (systemd timer, 14-day retention). See the dated sections below. Still unbuilt: versioning, job resume/retry, leases, fallback beyond 9router, new Discord commands, queueing. |
 
 We are deliberately not building stages 5+ until 2–4 work end-to-end with
 real Discord messages, per the project's own "don't overcomplicate the
@@ -238,6 +238,33 @@ confirmed nothing was applied. Nothing about CoreBot or the other 5
 production specialists changed — verified programmatically (config diff),
 not just assumed.
 
+### Stage 7: job state machine + history, crash recovery, backups (2026-08-20)
+
+Added on top of the Stage 5/6 Work Registry daemon, no changes to the
+event parser or the visible-delegation pipeline:
+
+- **State machine + history**: every job status transition is now logged
+  to a new `job_events` audit table (previously only the current status
+  was kept). Full design and verification in `registry/README.md`.
+- **Crash recovery**, two real gaps closed: (1) the old fixed 5-minute
+  "is this live or backfill" window meant a real outage longer than 5
+  minutes silently dropped Discord delivery for anything that finished
+  during it — replaced with a heartbeat-based cutoff so a crash still
+  gets a full, correct catch-up on restart, while a normal deploy/restart
+  gets none (verified live, both cases); (2) a new 60-second sweep detects
+  jobs stuck in `created`/`in_progress` with no completion signal for 20+
+  minutes (specialist session died, daemon restarted mid-job) and marks
+  them `orphaned` with an owner notice — verified live against two real
+  jobs actually stuck since 2026-08-18 testing.
+- **Backups**: a daily systemd timer (`openmt-backup.timer`, 14-day
+  retention) snapshots the registry SQLite DB and `openclaw.json` (live
+  config + credentials — not in git) to `~/openmt-backups/`. Verified
+  live: a real backup ran, both files present and independently readable.
+
+Everything here is additive to the existing daemon/schema — no changes to
+`agents/*/AGENTS.md` or `SOUL.md`, no agent, model, or delegation config
+touched. Full detail: `registry/README.md`.
+
 ## Repo layout
 
 ```
@@ -258,7 +285,7 @@ docs/
   02-discord-bots-setup.md        create the 7 bots + company server in Discord's Developer Portal
   03-provider-api-keys.md         get OpenAI / Anthropic / Google API keys
   04-cost-and-token-discipline.md deterministic-vs-model rules that keep API spend down
-registry/                         Stage 5: Work Registry daemon + MCP /usage tool — see registry/README.md
+registry/                         Stages 5-7: Work Registry daemon, MCP /usage tool, backups — see registry/README.md
 ```
 
 Each `agents/<id>/` folder holds the two files OpenClaw reads to build that

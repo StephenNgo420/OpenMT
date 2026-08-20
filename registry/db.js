@@ -54,11 +54,31 @@ CREATE TABLE IF NOT EXISTS tail_offsets (
   byte_offset INTEGER NOT NULL
 );
 
+-- State machine history (Stage 7): one row per status transition, so a
+-- job's full lifecycle is auditable, not just its current status.
+CREATE TABLE IF NOT EXISTS job_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_row_id INTEGER NOT NULL REFERENCES jobs(id),
+  from_status TEXT,
+  to_status TEXT NOT NULL,
+  note TEXT,
+  timestamp TEXT NOT NULL
+);
+
+-- Small key/value store for daemon-level state that must survive a
+-- restart — currently just the heartbeat used for crash-recovery catch-up
+-- (see daemon.js). Not job-specific, so it doesn't belong in tail_offsets.
+CREATE TABLE IF NOT EXISTS daemon_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_usage_job_row ON usage_log(job_row_id);
 CREATE INDEX IF NOT EXISTS idx_usage_agent_time ON usage_log(agent_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_jobs_child_session ON jobs(child_session_key);
 CREATE INDEX IF NOT EXISTS idx_jobs_job_id ON jobs(job_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_parent_session ON jobs(parent_session_id, status);
+CREATE INDEX IF NOT EXISTS idx_job_events_job_row ON job_events(job_row_id);
 `;
 
 function openDb(dbPath) {
@@ -69,6 +89,19 @@ function openDb(dbPath) {
   return db;
 }
 
+// Records a status transition into job_events. Called by every function
+// below that changes jobs.status, so job_events is always a complete,
+// derivable-from-nothing-else history of the state machine.
+function recordEvent(db, jobRowId, fromStatus, toStatus, note) {
+  db.prepare(
+    `INSERT INTO job_events (job_row_id, from_status, to_status, note, timestamp) VALUES (?, ?, ?, ?, ?)`
+  ).run(jobRowId, fromStatus ?? null, toStatus, note ?? null, new Date().toISOString());
+}
+
+function jobHistory(db, rowId) {
+  return db.prepare(`SELECT * FROM job_events WHERE job_row_id = ? ORDER BY id ASC`).all(rowId);
+}
+
 function insertJob(db, job) {
   try {
     db.prepare(
@@ -77,7 +110,10 @@ function insertJob(db, job) {
     ).run(job.jobId, job.toolCallId, job.parentSessionId, job.prefix, job.seq, job.taskType ?? null, job.userRequest ?? null, job.objective ?? null, job.createdAt);
   } catch (e) {
     if (!String(e.message).includes("UNIQUE constraint")) throw e; // same tool_call_id seen twice (re-tail) — fine, ignore
+    return;
   }
+  const created = findJobByToolCallId(db, job.toolCallId);
+  if (created) recordEvent(db, created.id, null, "created", null);
 }
 
 // The job this parent session is most recently waiting on completion for.
@@ -95,10 +131,39 @@ function markJobInProgress(db, rowId, fields) {
   db.prepare(
     `UPDATE jobs SET assigned_agent = ?, child_session_key = ?, run_id = ?, status = 'in_progress' WHERE id = ?`
   ).run(fields.assignedAgent, fields.childSessionKey, fields.runId, rowId);
+  recordEvent(db, rowId, "created", "in_progress", `assigned to ${fields.assignedAgent}`);
 }
 
-function markJobFailed(db, rowId, note) {
+function markJobFailed(db, rowId, note, fromStatus) {
   db.prepare(`UPDATE jobs SET status = 'failed', one_liner_summary = ?, completed_at = ? WHERE id = ?`).run(note, new Date().toISOString(), rowId);
+  recordEvent(db, rowId, fromStatus ?? null, "failed", note);
+}
+
+// Terminal-but-uncertain: the pipeline lost track of this job (specialist
+// never yielded, daemon or session died mid-flight) rather than it
+// completing or failing cleanly. Distinct from "failed" because we don't
+// actually know the outcome — see daemon.js's stale-job sweep.
+function markJobOrphaned(db, rowId, note, fromStatus) {
+  db.prepare(`UPDATE jobs SET status = 'orphaned', one_liner_summary = ?, completed_at = ? WHERE id = ?`).run(note, new Date().toISOString(), rowId);
+  recordEvent(db, rowId, fromStatus ?? null, "orphaned", note);
+}
+
+// Jobs sitting in `status` longer than `olderThanIso` (compared against
+// created_at) with nothing newer — candidates for the stale-job sweep.
+function findStaleJobsByStatus(db, status, olderThanIso) {
+  return db.prepare(`SELECT * FROM jobs WHERE status = ? AND created_at < ? ORDER BY id ASC`).all(status, olderThanIso);
+}
+
+function getDaemonState(db, key) {
+  const row = db.prepare(`SELECT value FROM daemon_state WHERE key = ?`).get(key);
+  return row ? row.value : null;
+}
+
+function setDaemonState(db, key, value) {
+  db.prepare(
+    `INSERT INTO daemon_state (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).run(key, value);
 }
 
 function setJobRequester(db, rowId, channel, account) {
@@ -115,6 +180,7 @@ function completeJob(db, rowId, oneLiner) {
   db.prepare(
     `UPDATE jobs SET status = 'completed', one_liner_summary = ?, completed_at = ? WHERE id = ?`
   ).run(oneLiner, new Date().toISOString(), rowId);
+  recordEvent(db, rowId, "in_progress", "completed", oneLiner);
 }
 
 function insertUsage(db, u) {
@@ -181,4 +247,5 @@ module.exports = {
   openDb, insertJob, findJobByToolCallId, findLatestInProgressJobByParentSession, markJobInProgress, markJobFailed,
   setJobRequester, findJobByChildSessionKey, completeJob, insertUsage, sumJobCost, getTailOffset, setTailOffset,
   usageByAgentProvider, usageTotal, findJobByLabel, usageForAgent,
+  recordEvent, jobHistory, markJobOrphaned, findStaleJobsByStatus, getDaemonState, setDaemonState,
 };

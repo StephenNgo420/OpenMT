@@ -22,10 +22,30 @@ const OWNER_DISCORD_MENTION = process.env.OWNER_DISCORD_ID ? `<@${process.env.OW
 const DB_PATH = process.env.REGISTRY_DB_PATH || "/home/OpenMT/OpenMT/registry/registry.sqlite";
 const POLL_MS = 500; // fast enough to catch short-lived child sessions before cleanup:delete removes them
 const RESCAN_MS = 30000;
+const HEARTBEAT_MS = 10000;
+const SWEEP_MS = 60000;
+// A job stuck in "created" or "in_progress" this long with no further
+// activity is treated as lost (specialist session died, daemon restarted
+// mid-job, etc.) rather than silently waited on forever.
+const STALE_JOB_MS = 20 * 60 * 1000;
 
 const database = db.openDb(DB_PATH);
 let sessionKeyIndex = loadSessionKeyIndex();
 let lastRescan = 0;
+
+// Crash-recovery cutoff (Stage 7): everything that happened at or before
+// the daemon's last known-good heartbeat is treated as backfill (recorded
+// but not re-delivered to Discord); everything after it — including stuff
+// that happened while this process was down, however long that was — gets
+// delivered, because we owe the owner a notification for it. On a truly
+// first-ever run there's no prior heartbeat, so the cutoff is "now",
+// matching the old fixed 5-minute-window behavior for that one case.
+const DELIVERY_CUTOFF = db.getDaemonState(database, "last_heartbeat_at") || new Date().toISOString();
+log("delivery cutoff (crash-recovery catch-up boundary):", DELIVERY_CUTOFF);
+
+function writeHeartbeat() {
+  db.setDaemonState(database, "last_heartbeat_at", new Date().toISOString());
+}
 
 // file path -> { agentId, sessionId }
 const watchedFiles = new Map();
@@ -122,12 +142,11 @@ function deliverMessage({ account, target, message, label }) {
 
 // Guard against backfill (replaying old session history on startup, or
 // after a restart) sending live Discord notifications for jobs that
-// actually completed long ago. Only jobs created within this window get
-// a real delivery; older ones still get recorded correctly in the DB.
-const LIVE_DELIVERY_WINDOW_MS = 5 * 60 * 1000;
-
+// actually completed long ago. Anything created at/before DELIVERY_CUTOFF
+// (this run's captured last-heartbeat, see above) is backfill; anything
+// after it — genuinely new, or missed during downtime — gets delivered.
 function isRecent(createdAtIso) {
-  return Date.now() - new Date(createdAtIso).getTime() <= LIVE_DELIVERY_WINDOW_MS;
+  return new Date(createdAtIso).getTime() > new Date(DELIVERY_CUTOFF).getTime();
 }
 
 function formatAcceptAssignMessage(job) {
@@ -146,6 +165,33 @@ function formatCompletionMessage(jobId, oneLiner, totalCost) {
 function truncateOneLiner(text) {
   const firstLine = (text || "").split("\n").find((l) => l.trim().length > 0) || "";
   return firstLine.length > 200 ? firstLine.slice(0, 197) + "..." : firstLine;
+}
+
+function formatOrphanMessage(job) {
+  return `⚠️ \`${job.job_id}\` never finished cleanly (no response in over ${Math.round(STALE_JOB_MS / 60000)} min) — marking it orphaned so it doesn't sit open forever. It may still have done real work; check with ${displayName(job.assigned_agent || job.prefix)} directly if that matters.`;
+}
+
+// Crash recovery for the pipeline itself: a specialist session can die,
+// or the daemon can restart between a job's creation and its completion,
+// leaving a job stuck in "created"/"in_progress" forever with nothing
+// ever generating a completion event for it. Runs on a slow interval,
+// separate from the fast event-driven tailing above.
+function sweepStaleJobs() {
+  const cutoff = new Date(Date.now() - STALE_JOB_MS).toISOString();
+  for (const status of ["created", "in_progress"]) {
+    for (const job of db.findStaleJobsByStatus(database, status, cutoff)) {
+      db.markJobOrphaned(database, job.id, "stale — no completion signal received", status);
+      log("job orphaned (stale):", job.job_id, `(row ${job.id}, was ${status})`);
+      if (job.requester_channel && isRecent(job.created_at)) {
+        deliverMessage({
+          account: "core",
+          target: job.requester_channel,
+          message: formatOrphanMessage(job),
+          label: "orphan-notice",
+        });
+      }
+    }
+  }
 }
 
 function processEvent(agentId, sessionId, event) {
@@ -203,7 +249,7 @@ function processEvent(agentId, sessionId, event) {
     }
     case "spawn_rejected": {
       const job = db.findJobByToolCallId(database, event.toolCallId);
-      if (job && job.status === "created") db.markJobFailed(database, job.id, `spawn rejected: ${event.error}`);
+      if (job && job.status === "created") db.markJobFailed(database, job.id, `spawn rejected: ${event.error}`, "created");
       break;
     }
     case "usage": {
@@ -322,9 +368,19 @@ function watchAgentDirs() {
 log("OpenMT Work Registry daemon starting. DB:", DB_PATH);
 rescanAndTailAll();
 watchAgentDirs();
+writeHeartbeat();
 setInterval(rescanAndTailAll, POLL_MS);
+setInterval(writeHeartbeat, HEARTBEAT_MS);
+setInterval(sweepStaleJobs, SWEEP_MS);
 
-process.on("SIGTERM", () => {
-  log("shutting down");
+function shutdown(signal) {
+  log(`shutting down (${signal})`);
+  // A clean shutdown writes a fresh heartbeat, so a deliberate restart
+  // (deploy, manual restart) gets essentially zero catch-up window on the
+  // next boot — only a real crash (no time to run this handler) leaves the
+  // heartbeat stale enough to trigger genuine catch-up delivery.
+  writeHeartbeat();
   process.exit(0);
-});
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
