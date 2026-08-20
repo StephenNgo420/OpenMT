@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   one_liner_summary TEXT,
   budget_usd REAL,
   created_at TEXT NOT NULL,
-  completed_at TEXT
+  completed_at TEXT,
+  lease_expires_at TEXT,
+  artifact_path TEXT
 );
 
 CREATE TABLE IF NOT EXISTS usage_log (
@@ -81,12 +83,39 @@ CREATE INDEX IF NOT EXISTS idx_jobs_parent_session ON jobs(parent_session_id, st
 CREATE INDEX IF NOT EXISTS idx_job_events_job_row ON job_events(job_row_id);
 `;
 
+// Columns added after the table already existed in production — CREATE
+// TABLE IF NOT EXISTS above only helps a brand-new DB, so any DB created
+// before this column existed needs an explicit ALTER TABLE to catch up.
+const COLUMN_MIGRATIONS = [
+  "ALTER TABLE jobs ADD COLUMN lease_expires_at TEXT",
+  "ALTER TABLE jobs ADD COLUMN artifact_path TEXT",
+];
+
+// Default execution lease: how long a job can sit in `created` or
+// `in_progress` with no further activity before the stale-job sweep
+// treats it as lost (see daemon.js). Stored explicitly per-job in
+// lease_expires_at (rather than recomputed from created_at + a constant)
+// so a future change could give specific job types a longer/shorter
+// lease without a schema change.
+const DEFAULT_LEASE_MS = 20 * 60 * 1000;
+
 function openDb(dbPath) {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec(SCHEMA);
+  for (const stmt of COLUMN_MIGRATIONS) {
+    try {
+      db.exec(stmt);
+    } catch (e) {
+      if (!String(e.message).includes("duplicate column")) throw e;
+    }
+  }
   return db;
+}
+
+function newLeaseExpiry() {
+  return new Date(Date.now() + DEFAULT_LEASE_MS).toISOString();
 }
 
 // Records a status transition into job_events. Called by every function
@@ -105,9 +134,9 @@ function jobHistory(db, rowId) {
 function insertJob(db, job) {
   try {
     db.prepare(
-      `INSERT INTO jobs (job_id, tool_call_id, parent_session_id, prefix, seq, task_type, user_request, objective, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'created', ?)`
-    ).run(job.jobId, job.toolCallId, job.parentSessionId, job.prefix, job.seq, job.taskType ?? null, job.userRequest ?? null, job.objective ?? null, job.createdAt);
+      `INSERT INTO jobs (job_id, tool_call_id, parent_session_id, prefix, seq, task_type, user_request, objective, status, created_at, lease_expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?)`
+    ).run(job.jobId, job.toolCallId, job.parentSessionId, job.prefix, job.seq, job.taskType ?? null, job.userRequest ?? null, job.objective ?? null, job.createdAt, newLeaseExpiry());
   } catch (e) {
     if (!String(e.message).includes("UNIQUE constraint")) throw e; // same tool_call_id seen twice (re-tail) — fine, ignore
     return;
@@ -128,9 +157,12 @@ function findJobByToolCallId(db, toolCallId) {
 }
 
 function markJobInProgress(db, rowId, fields) {
+  // Lease resets here, not just at creation — the clock on "did the
+  // specialist actually finish" should start when work begins, not when
+  // CoreBot first wrote the job packet.
   db.prepare(
-    `UPDATE jobs SET assigned_agent = ?, child_session_key = ?, run_id = ?, status = 'in_progress' WHERE id = ?`
-  ).run(fields.assignedAgent, fields.childSessionKey, fields.runId, rowId);
+    `UPDATE jobs SET assigned_agent = ?, child_session_key = ?, run_id = ?, status = 'in_progress', lease_expires_at = ? WHERE id = ?`
+  ).run(fields.assignedAgent, fields.childSessionKey, fields.runId, newLeaseExpiry(), rowId);
   recordEvent(db, rowId, "created", "in_progress", `assigned to ${fields.assignedAgent}`);
 }
 
@@ -148,10 +180,19 @@ function markJobOrphaned(db, rowId, note, fromStatus) {
   recordEvent(db, rowId, fromStatus ?? null, "orphaned", note);
 }
 
-// Jobs sitting in `status` longer than `olderThanIso` (compared against
-// created_at) with nothing newer — candidates for the stale-job sweep.
-function findStaleJobsByStatus(db, status, olderThanIso) {
-  return db.prepare(`SELECT * FROM jobs WHERE status = ? AND created_at < ? ORDER BY id ASC`).all(status, olderThanIso);
+// Jobs whose execution lease has expired while still open — candidates
+// for the stale-job sweep (daemon.js). `statuses` is an array since both
+// `created` (never got a spawn_result) and `in_progress` (specialist never
+// yielded) jobs can go stale.
+function findExpiredLeases(db, statuses, nowIso) {
+  const placeholders = statuses.map(() => "?").join(",");
+  return db.prepare(
+    `SELECT * FROM jobs WHERE status IN (${placeholders}) AND lease_expires_at IS NOT NULL AND lease_expires_at < ? ORDER BY id ASC`
+  ).all(...statuses, nowIso);
+}
+
+function setJobArtifact(db, rowId, artifactPath) {
+  db.prepare(`UPDATE jobs SET artifact_path = ? WHERE id = ?`).run(artifactPath, rowId);
 }
 
 function getDaemonState(db, key) {
@@ -247,5 +288,6 @@ module.exports = {
   openDb, insertJob, findJobByToolCallId, findLatestInProgressJobByParentSession, markJobInProgress, markJobFailed,
   setJobRequester, findJobByChildSessionKey, completeJob, insertUsage, sumJobCost, getTailOffset, setTailOffset,
   usageByAgentProvider, usageTotal, findJobByLabel, usageForAgent,
-  recordEvent, jobHistory, markJobOrphaned, findStaleJobsByStatus, getDaemonState, setDaemonState,
+  recordEvent, jobHistory, markJobOrphaned, findExpiredLeases, getDaemonState, setDaemonState,
+  setJobArtifact, DEFAULT_LEASE_MS,
 };

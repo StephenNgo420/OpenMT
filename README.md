@@ -44,7 +44,7 @@ Important, because it's easy to get confused:
 | 4 | CoreBot routing (direct vs. delegate) | ✅ done — CoreBot delegates via OpenClaw's native `sessions_spawn` sub-agent mechanism: `agents.defaults.subagents.requireAgentId=true` plus a per-agent `allowAgents` list enforces the responsibility registry in `agents/core/AGENTS.md` at the config level (not just in prose). CoreBot's own `image_generate`/`video_generate` tools are denied (`agents.list[core].tools.deny`) so it structurally can't silently do PictureBot's job instead of delegating — that gap was found and fixed by live testing. Verified 2026-08-18: direct math question answered directly (no delegation); a finance question correctly spawned a properly structured `sessions_spawn` job packet to FinanceBot end-to-end; direct provider checks confirm FinanceBot/CodingBot/FileBot (Anthropic) and PictureBot's actual image generation (Google) all now succeed — the two provider issues below are resolved. |
 | 5 | Job IDs + Work Registry (includes the per-job cost ledger + `/usage` — see `docs/04-cost-and-token-discipline.md`) | ✅ core built and verified live — Work Registry daemon (`registry/`, systemd service `openmt-registry.service`) backs CoreBot's existing JOB ID convention with a real SQLite-backed lifecycle (created → in_progress → completed/failed), delivers deterministic zero-LLM completion messages to Discord, and exposes `/usage` via an MCP tool that CoreBot relays verbatim (no recomputation). Verified end-to-end: a live delegation, its completion message, and a live `/usage` request all landed correctly in Discord. **Known gap:** per-job specialist cost isn't reliably captured — see `registry/README.md` for why (confirmed not fixable via `cleanup: "keep"`). No budget enforcement yet (deliberately deferred — see docs/04). |
 | 6 | Visible delegation in the server | ✅ done — the Work Registry daemon posts each delegation's full lifecycle visibly in Discord, as the actually-relevant bot identity at each step (not just CoreBot relaying): CoreBot's "✅ Accepted / assigning to X" → the specialist's own "👋 X here — starting" → the specialist's own completion message with cost and an owner mention. Verified live end-to-end. The owner mention is a fixed Discord user ID (`OWNER_DISCORD_ID` env var) rather than the actual per-message author — recovering the real requester's ID wasn't possible from any data source checked (session transcripts, sessions index, gateway logs), and for this single-owner project that's an acceptable simplification. |
-| 7+ | State machine, history, versioning, resume, leases, fallback, commands, queueing, security, self-change governance, backups | 🟨 partial — done: self-change governance (`codex-review` gate on CodingBot's HIGH/CRITICAL ops); job state machine + history (`job_events` audit table); crash recovery (heartbeat-based catch-up + stale-job sweep marking lost jobs `orphaned`); daily backups of the registry DB + `openclaw.json` (systemd timer, 14-day retention). See the dated sections below. Still unbuilt: versioning, job resume/retry, leases, fallback beyond 9router, new Discord commands, queueing. |
+| 7+ | State machine, history, versioning, resume, leases, fallback, commands, queueing, security, self-change governance, backups | 🟨 mostly done for a single-owner project — see the two dated Stage 7 sections below for what shipped, what was deliberately left out, and why. Genuinely still open: artifact versioning for FileBot/CodingBot outputs (blocked on FileBot's document tool never having actually fired — see below), any queueing/multi-tenancy work (explicitly deferred until there's a real second owner). |
 
 We are deliberately not building stages 5+ until 2–4 work end-to-end with
 real Discord messages, per the project's own "don't overcomplicate the
@@ -261,9 +261,78 @@ event parser or the visible-delegation pipeline:
   config + credentials — not in git) to `~/openmt-backups/`. Verified
   live: a real backup ran, both files present and independently readable.
 
-Everything here is additive to the existing daemon/schema — no changes to
-`agents/*/AGENTS.md` or `SOUL.md`, no agent, model, or delegation config
-touched. Full detail: `registry/README.md`.
+Everything here is additive to the existing daemon/schema — no agent,
+model, or delegation config touched. Full detail: `registry/README.md`.
+
+### Stage 7 continued: leases, retry, commands, and why versioning/queueing were scoped down (2026-08-20)
+
+Closing out the rest of the Stage 7+ bucket, working through it one piece
+at a time:
+
+- **Leases, formalized**: the stale-job sweep above used to recompute
+  staleness from `created_at` + a constant. Replaced with an explicit
+  `lease_expires_at` column, set when a job is created and reset when it
+  enters `in_progress` (so the clock starts when the specialist actually
+  begins, not when the packet was written). The sweep just queries expired
+  leases directly — same default duration (20 min) as before, but now a
+  real, inspectable, per-job field instead of an implicit calculation.
+- **Resume/retry, as a real `/retry <job id>` Discord command**: two new
+  read-only MCP tools, `work_registry_job_history` (backs a new
+  `/history <job id>` command — the state-machine history above is now
+  actually visible, not just SQL-queryable) and `work_registry_get_retry_data`.
+  On `/retry`, CoreBot fetches the failed/orphaned job's original task
+  packet from the tool and re-delegates it verbatim via `sessions_spawn`
+  with a fresh job ID — the registry has no delegation authority of its
+  own (correctly — only an agent can decide to redispatch work), so retry
+  is CoreBot doing what it already does, just re-triggered. **Verified
+  live, full loop**: `/retry coding_001` (one of the two orphaned jobs
+  from the crash-recovery test above) → CoreBot pulled the original
+  packet → spawned `coding_002` to CodingBot with the same request →
+  daemon tracked it through created → in_progress → completed with full
+  `job_events` history and a real lease → all three visible-delegation
+  Discord messages delivered correctly.
+- **Fallback**: already substantively covered by the 9router 3-tier chain
+  (2026-08-19) — nothing new needed here.
+- **Artifact versioning — investigated, intentionally not built**: checked
+  how each specialist that could produce a durable artifact actually
+  delivers it, using real session data rather than assuming:
+  - **PictureBot** does persist real files, at
+    `~/.openclaw/media/tool-image-generation/<slug>---<uuid>.<ext>` — the
+    daemon now captures this path onto the job row (`artifact_path`,
+    surfaced in `/usage job <id>`) whenever it can see the `MEDIA:` line
+    an image job's reply carries, on a best-effort basis (same underlying
+    race as specialist cost capture — reliable for direct-mode sessions,
+    not guaranteed for a delegated child session that gets cleaned up
+    before we read it).
+  - **FileBot** — its Word/Excel/PowerPoint generation tool has **never
+    actually been called** in any real session on this deployment (zero
+    tool calls across all its historical sessions). This means FileBot's
+    core stated purpose may not actually be wired up yet — that's a real
+    finding, separate from Stage 7, worth checking before relying on
+    FileBot for anything. Filed here rather than silently worked around.
+  - **CodingBot** has no separate artifact concept — it edits this repo
+    directly, and git already versions that.
+  - Given one specialist's tool appears unbuilt and the other has no
+    version-chaining signal yet (nothing today marks "this job is a new
+    revision of that prior artifact" — would need a task-packet
+    convention CoreBot doesn't have), building a general versioning
+    scheme now would mean versioning a single specialist's output with no
+    real chaining logic behind it. Captured the artifact link (real,
+    useful on its own) and stopped there rather than build the rest on an
+    unverified foundation.
+- **Queueing — deliberately not built**: the current design is
+  synchronous, single-delegator (CoreBot spawns and yields per request,
+  no worker pool or backlog). There's no contention problem to solve for
+  a single owner today. Confirmed with the owner this is about future
+  multi-user support, not a current need — scoped down rather than built
+  against a hypothetical, so nothing here should be read as multi-tenant-safe
+  yet (the owner-mention delivery logic in particular is still
+  single-owner-only, per Stage 6).
+
+Nothing about `agents/coding/AGENTS.md`, the codex-review gate, or any
+other agent's model/delegation config was touched by any of this — only
+`registry/`, `agents/core/AGENTS.md` (new `/history`/`/retry` sections),
+and this README.
 
 ## Repo layout
 

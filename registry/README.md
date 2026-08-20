@@ -168,11 +168,54 @@ readable back with a fresh `DatabaseSync` connection.
 capture is still not reliably possible (see above) — this stage doesn't
 touch that.
 
-**Not covered by this stage** (still open Stage 7+ items): a formal job
-resume/retry mechanism (an `orphaned` job is flagged, not automatically
-retried), leases, queueing, versioning, or any new Discord commands for
-querying `job_events`/history directly (it's there in SQL if needed, but
-nothing surfaces it via `/usage` or a new command yet).
+**Not covered by this stage** (closed in the follow-up pass below): a
+formal retry mechanism, leases as an explicit field, or new Discord
+commands surfacing `job_events`/history.
+
+## Stage 7 continued (2026-08-20): leases, `/retry`, `/history`
+
+- **`lease_expires_at`** — new column on `jobs`, set at creation and reset
+  when a job enters `in_progress`. The stale-job sweep now queries
+  `db.findExpiredLeases()` directly instead of recomputing staleness from
+  `created_at` + a constant. Same default duration as before
+  (`db.DEFAULT_LEASE_MS`, 20 min) — this is a formalization, not a
+  behavior change, but it means a future per-job-type lease duration
+  wouldn't need a schema change, and `SELECT job_id, lease_expires_at
+  FROM jobs WHERE status='in_progress'` now tells you directly when each
+  open job will be swept.
+- **`artifact_path`** — new column on `jobs`. When a `final_assistant`
+  event's text contains a `MEDIA:<path>` reference (confirmed live format
+  for `image_generate` results — `~/.openclaw/media/tool-image-generation/
+  <slug>---<uuid>.<ext>`), the daemon captures it onto the job row;
+  surfaced in `/usage job <id>` as an `Artifact:` line. Best-effort, same
+  underlying race as specialist cost capture (see above) — reliable when
+  the event we're reading is the one that actually carried the
+  `MEDIA:` line, not guaranteed for a delegated child session that gets
+  cleaned up first. This is deliberately just artifact *capture*, not
+  versioning — see the main README's Stage 7 section for why full
+  versioning wasn't built (FileBot's document tool has never actually
+  fired in any real session; there's no signal yet for "this is a new
+  revision of that artifact").
+- **`work_registry_job_history`** (MCP tool) — reads `job_events` for a
+  job ID, formatted by `job-commands.js`'s `formatJobHistory`. Backs a new
+  `/history <job id>` command in `agents/core/AGENTS.md`, relayed verbatim
+  like `/usage`.
+- **`work_registry_get_retry_data`** (MCP tool) — for a `failed`/`orphaned`
+  job, returns its original TASK TYPE/USER REQUEST/OBJECTIVE and assigned
+  specialist so CoreBot can re-issue it via `sessions_spawn` with a fresh
+  job ID; for any other status, returns an explanation instead (CoreBot is
+  instructed not to delegate anything in that case). The registry itself
+  never delegates — only CoreBot can decide to redispatch work, so
+  `/retry` is CoreBot doing its normal thing, re-triggered with the
+  original packet. **Verified live, full loop**: `/retry coding_001`
+  (orphaned from the crash-recovery test) → CoreBot pulled the packet →
+  spawned `coding_002` to CodingBot with the identical request → tracked
+  through the full state machine with real `job_events`/lease/all three
+  Discord messages, exactly like any other delegation.
+- **Fallback**: already covered by 9router (2026-08-19), nothing new here.
+- **Queueing**: not built — current design is synchronous/single-delegator
+  with no contention to solve; explicitly deferred until there's a real
+  need (future multi-user support), not built against a hypothetical.
 
 ## Files
 
@@ -187,7 +230,10 @@ nothing surfaces it via `/usage` or a new command yet).
 - `daemon.js` — the long-running process: tails every agent's session
   files, correlates events, drives job lifecycle, delivers completions.
 - `usage-format.js` — deterministic text formatting for `/usage` reports.
-- `mcp-server.js` — the MCP server exposing `work_registry_query_usage`
+- `job-commands.js` — deterministic text formatting for `/history` and
+  `/retry` (task-packet extraction for the latter).
+- `mcp-server.js` — the MCP server exposing `work_registry_query_usage`,
+  `work_registry_job_history`, and `work_registry_get_retry_data`
   (stdio transport, spawned by OpenClaw per `mcp.servers` config).
 - `test-replay.js` — offline test harness; replays real session files
   already on disk through the parser (no live agent calls needed).

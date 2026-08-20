@@ -3,6 +3,18 @@
 // session files directly — see registry/README.md.
 
 const JOB_ID_RE = /JOB ID:\s*(\S+)/;
+// A generated-artifact reference an agent embeds in its own reply text,
+// e.g. "...\n\nMEDIA:/home/OpenMT/.openclaw/media/tool-image-generation/foo---<uuid>.jpg"
+// (confirmed live in real PictureBot session data, 2026-08-20). Only
+// image_generate results carry this today — FileBot's document tool has
+// never actually fired in any real session (checked), so there's nothing
+// equivalent to look for there yet.
+const MEDIA_RE = /MEDIA:(\S+)/;
+
+function extractMediaPath(text) {
+  const m = MEDIA_RE.exec(text || "");
+  return m ? m[1] : null;
+}
 
 function parseJobId(jobId) {
   // Prefix can itself contain underscores (e.g. "core_cmds_001"), so split
@@ -109,4 +121,4 @@ function extractField(task, label) {
   return m[1].replace(/^"|"$/g, "").trim();
 }
 
-module.exports = { parseLine, parseJobId, extractField };
+module.exports = { parseLine, parseJobId, extractField, extractMediaPath };

@@ -9,6 +9,7 @@ const { StdioServerTransport } = require("@modelcontextprotocol/sdk/server/stdio
 const { z } = require("zod");
 const db = require("./db");
 const { formatUsageReport } = require("./usage-format");
+const { formatJobHistory, formatJobForRetry } = require("./job-commands");
 
 const DB_PATH = process.env.REGISTRY_DB_PATH || "/home/OpenMT/OpenMT/registry/registry.sqlite";
 const database = db.openDb(DB_PATH);
@@ -32,6 +33,43 @@ server.registerTool(
   },
   async ({ scope, filter }) => ({
     content: [{ type: "text", text: formatUsageReport(database, scope, filter) }],
+  })
+);
+
+server.registerTool(
+  "work_registry_job_history",
+  {
+    title: "Get a job's full status-transition history",
+    description:
+      "Reads every recorded status transition for a job (created/in_progress/" +
+      "completed/failed/orphaned, with timestamps and notes) and returns a " +
+      "preformatted report. Relay verbatim — do not recompute or reword it.",
+    inputSchema: {
+      jobId: z.string().describe("The job ID, e.g. finance_001"),
+    },
+  },
+  async ({ jobId }) => ({
+    content: [{ type: "text", text: formatJobHistory(database, jobId) }],
+  })
+);
+
+server.registerTool(
+  "work_registry_get_retry_data",
+  {
+    title: "Get a failed/orphaned job's original task packet for retry",
+    description:
+      "Looks up a job by ID. If it's failed or orphaned, returns its original " +
+      "TASK TYPE/USER REQUEST/OBJECTIVE and which specialist it was assigned " +
+      "to, so you can re-issue it via sessions_spawn with a fresh job ID " +
+      "(note in CONTEXT that it's a retry of the original job ID). If the job " +
+      "is still open or already completed, returns an explanation instead — " +
+      "in that case do not spawn anything, just relay the explanation.",
+    inputSchema: {
+      jobId: z.string().describe("The job ID to retry, e.g. finance_001"),
+    },
+  },
+  async ({ jobId }) => ({
+    content: [{ type: "text", text: formatJobForRetry(database, jobId) }],
   })
 );
 

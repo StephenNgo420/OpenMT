@@ -8,7 +8,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execFile } = require("node:child_process");
 const db = require("./db");
-const { parseLine } = require("./parser");
+const { parseLine, extractMediaPath } = require("./parser");
 const { loadSessionKeyIndex, parseDiscordChannelFromKey, AGENTS_DIR } = require("./session-keys");
 const { displayName } = require("./usage-format");
 
@@ -24,10 +24,6 @@ const POLL_MS = 500; // fast enough to catch short-lived child sessions before c
 const RESCAN_MS = 30000;
 const HEARTBEAT_MS = 10000;
 const SWEEP_MS = 60000;
-// A job stuck in "created" or "in_progress" this long with no further
-// activity is treated as lost (specialist session died, daemon restarted
-// mid-job, etc.) rather than silently waited on forever.
-const STALE_JOB_MS = 20 * 60 * 1000;
 
 const database = db.openDb(DB_PATH);
 let sessionKeyIndex = loadSessionKeyIndex();
@@ -168,28 +164,29 @@ function truncateOneLiner(text) {
 }
 
 function formatOrphanMessage(job) {
-  return `⚠️ \`${job.job_id}\` never finished cleanly (no response in over ${Math.round(STALE_JOB_MS / 60000)} min) — marking it orphaned so it doesn't sit open forever. It may still have done real work; check with ${displayName(job.assigned_agent || job.prefix)} directly if that matters.`;
+  return `⚠️ \`${job.job_id}\` never finished cleanly (lease expired after ${Math.round(db.DEFAULT_LEASE_MS / 60000)} min with no response) — marking it orphaned so it doesn't sit open forever. It may still have done real work; check with ${displayName(job.assigned_agent || job.prefix)} directly if that matters. Retry it with \`/retry ${job.job_id}\` if it's worth re-running.`;
 }
 
 // Crash recovery for the pipeline itself: a specialist session can die,
 // or the daemon can restart between a job's creation and its completion,
 // leaving a job stuck in "created"/"in_progress" forever with nothing
 // ever generating a completion event for it. Runs on a slow interval,
-// separate from the fast event-driven tailing above.
+// separate from the fast event-driven tailing above. Driven by each job's
+// own lease_expires_at (set at creation, reset when it enters in_progress)
+// rather than a value recomputed here, so a future per-job-type lease
+// duration wouldn't need any change to this sweep.
 function sweepStaleJobs() {
-  const cutoff = new Date(Date.now() - STALE_JOB_MS).toISOString();
-  for (const status of ["created", "in_progress"]) {
-    for (const job of db.findStaleJobsByStatus(database, status, cutoff)) {
-      db.markJobOrphaned(database, job.id, "stale — no completion signal received", status);
-      log("job orphaned (stale):", job.job_id, `(row ${job.id}, was ${status})`);
-      if (job.requester_channel && isRecent(job.created_at)) {
-        deliverMessage({
-          account: "core",
-          target: job.requester_channel,
-          message: formatOrphanMessage(job),
-          label: "orphan-notice",
-        });
-      }
+  const now = new Date().toISOString();
+  for (const job of db.findExpiredLeases(database, ["created", "in_progress"], now)) {
+    db.markJobOrphaned(database, job.id, "lease expired — no completion signal received", job.status);
+    log("job orphaned (lease expired):", job.job_id, `(row ${job.id}, was ${job.status})`);
+    if (job.requester_channel && isRecent(job.created_at)) {
+      deliverMessage({
+        account: "core",
+        target: job.requester_channel,
+        message: formatOrphanMessage(job),
+        label: "orphan-notice",
+      });
     }
   }
 }
@@ -283,7 +280,14 @@ function processEvent(agentId, sessionId, event) {
       const totalCost = db.sumJobCost(database, job.id);
       const oneLiner = truncateOneLiner(event.text);
       db.completeJob(database, job.id, oneLiner);
-      log("job completed:", job.job_id, `(row ${job.id})`, `$${totalCost.toFixed(4)}`);
+      // Best-effort artifact capture (Stage 7) — same race as specialist
+      // cost capture (see registry/README.md): only catches it if this
+      // final_assistant event is the one that actually carried the
+      // MEDIA: reference, which isn't guaranteed for a spawned child
+      // session that gets cleaned up before we read it.
+      const mediaPath = extractMediaPath(event.text);
+      if (mediaPath) db.setJobArtifact(database, job.id, mediaPath);
+      log("job completed:", job.job_id, `(row ${job.id})`, `$${totalCost.toFixed(4)}`, mediaPath ? `artifact: ${mediaPath}` : "");
       if (!job.requester_channel) {
         log("job", job.job_id, "has no requester channel (non-Discord session) — skipping delivery");
       } else if (!isRecent(job.created_at)) {

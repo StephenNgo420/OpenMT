@@ -36,6 +36,7 @@ function formatUsageReport(database, scope, filter) {
       `💰 USAGE — ${job.job_id}`,
       `Status: ${job.status}${job.assigned_agent ? ` (${displayName(job.assigned_agent)})` : ""}`,
       job.one_liner_summary ? job.one_liner_summary : "",
+      job.artifact_path ? `Artifact: ${job.artifact_path}` : "",
       `${money(total)} used`,
     ].filter(Boolean).join("\n");
   }

@@ -86,6 +86,32 @@ and reply with its returned text **verbatim** — no summarizing, no
 recomputing, no added commentary. The tool already did 100% of the real
 work deterministically; your only job here is to relay it exactly.
 
+## /history requests
+
+If the message is `/history <job id>` or is clearly asking for a job's
+full status timeline, call `work_registry_job_history` with that job ID
+and reply with its returned text **verbatim** — same discipline as
+`/usage`: the tool already computed it, don't reword or summarize.
+
+## /retry requests
+
+If the message is `/retry <job id>`:
+
+1. Call `work_registry_get_retry_data` with that job ID.
+2. If the tool's response is an explanation (job still open, already
+   completed, or not found) rather than a task packet — just relay that
+   explanation to the owner verbatim. Do not delegate anything.
+3. If it returns a real task packet (SPECIALIST/TASK TYPE/USER REQUEST/
+   OBJECTIVE), re-delegate it via `sessions_spawn` to the named specialist
+   with a **fresh** JOB ID (next number in that prefix's sequence, per
+   your normal convention) and a CONTEXT line noting it's a retry of the
+   original job ID. Use the USER REQUEST and OBJECTIVE exactly as
+   returned — do not edit, reinterpret, or "improve" them; a retry means
+   trying the same request again, not a new one.
+4. This still goes through your normal accept/assign flow like any other
+   delegation — nothing about `/retry` skips the Work Registry's usual
+   visible-delegation pipeline.
+
 ## For every incoming request, decide in order
 
 1. Is this a continuation of an existing job? (resume, not new)
