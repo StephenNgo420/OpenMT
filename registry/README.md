@@ -193,9 +193,9 @@ commands surfacing `job_events`/history.
   `MEDIA:` line, not guaranteed for a delegated child session that gets
   cleaned up first. This is deliberately just artifact *capture*, not
   versioning — see the main README's Stage 7 section for why full
-  versioning wasn't built (FileBot's document tool has never actually
-  fired in any real session; there's no signal yet for "this is a new
-  revision of that artifact").
+  versioning wasn't built (no signal yet for "this is a new revision of
+  that artifact", even now that FileBot can actually produce files — see
+  the main README's "FileBot fixed" section).
 - **`work_registry_job_history`** (MCP tool) — reads `job_events` for a
   job ID, formatted by `job-commands.js`'s `formatJobHistory`. Backs a new
   `/history <job id>` command in `agents/core/AGENTS.md`, relayed verbatim

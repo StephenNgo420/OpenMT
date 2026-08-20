@@ -99,6 +99,20 @@ const COLUMN_MIGRATIONS = [
 // lease without a schema change.
 const DEFAULT_LEASE_MS = 20 * 60 * 1000;
 
+// registry.sqlite holds real (if mundane) user_request/objective text —
+// not secret, but not public either. Self-healing: enforced on every
+// daemon start regardless of what created the file or with what umask,
+// rather than relying only on the systemd unit's UMask=0077.
+function restrictPermissions(dbPath) {
+  for (const suffix of ["", "-wal", "-shm"]) {
+    try {
+      fs.chmodSync(dbPath + suffix, 0o600);
+    } catch {
+      // -wal/-shm may not exist yet (fresh DB, or not in WAL mode this run) — fine.
+    }
+  }
+}
+
 function openDb(dbPath) {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
@@ -111,6 +125,7 @@ function openDb(dbPath) {
       if (!String(e.message).includes("duplicate column")) throw e;
     }
   }
+  restrictPermissions(dbPath);
   return db;
 }
 

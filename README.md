@@ -44,7 +44,7 @@ Important, because it's easy to get confused:
 | 4 | CoreBot routing (direct vs. delegate) | ✅ done — CoreBot delegates via OpenClaw's native `sessions_spawn` sub-agent mechanism: `agents.defaults.subagents.requireAgentId=true` plus a per-agent `allowAgents` list enforces the responsibility registry in `agents/core/AGENTS.md` at the config level (not just in prose). CoreBot's own `image_generate`/`video_generate` tools are denied (`agents.list[core].tools.deny`) so it structurally can't silently do PictureBot's job instead of delegating — that gap was found and fixed by live testing. Verified 2026-08-18: direct math question answered directly (no delegation); a finance question correctly spawned a properly structured `sessions_spawn` job packet to FinanceBot end-to-end; direct provider checks confirm FinanceBot/CodingBot/FileBot (Anthropic) and PictureBot's actual image generation (Google) all now succeed — the two provider issues below are resolved. |
 | 5 | Job IDs + Work Registry (includes the per-job cost ledger + `/usage` — see `docs/04-cost-and-token-discipline.md`) | ✅ core built and verified live — Work Registry daemon (`registry/`, systemd service `openmt-registry.service`) backs CoreBot's existing JOB ID convention with a real SQLite-backed lifecycle (created → in_progress → completed/failed), delivers deterministic zero-LLM completion messages to Discord, and exposes `/usage` via an MCP tool that CoreBot relays verbatim (no recomputation). Verified end-to-end: a live delegation, its completion message, and a live `/usage` request all landed correctly in Discord. **Known gap:** per-job specialist cost isn't reliably captured — see `registry/README.md` for why (confirmed not fixable via `cleanup: "keep"`). No budget enforcement yet (deliberately deferred — see docs/04). |
 | 6 | Visible delegation in the server | ✅ done — the Work Registry daemon posts each delegation's full lifecycle visibly in Discord, as the actually-relevant bot identity at each step (not just CoreBot relaying): CoreBot's "✅ Accepted / assigning to X" → the specialist's own "👋 X here — starting" → the specialist's own completion message with cost and an owner mention. Verified live end-to-end. The owner mention is a fixed Discord user ID (`OWNER_DISCORD_ID` env var) rather than the actual per-message author — recovering the real requester's ID wasn't possible from any data source checked (session transcripts, sessions index, gateway logs), and for this single-owner project that's an acceptable simplification. |
-| 7+ | State machine, history, versioning, resume, leases, fallback, commands, queueing, security, self-change governance, backups | 🟨 mostly done for a single-owner project — see the two dated Stage 7 sections below for what shipped, what was deliberately left out, and why. Genuinely still open: artifact versioning for FileBot/CodingBot outputs (blocked on FileBot's document tool never having actually fired — see below), any queueing/multi-tenancy work (explicitly deferred until there's a real second owner). |
+| 7+ | State machine, history, versioning, resume, leases, fallback, commands, queueing, security, self-change governance, backups | 🟨 mostly done for a single-owner project — see the dated Stage 7 sections below (state machine/leases/retry/commands/backups, a security review, and the FileBot fix) for what shipped and why. Genuinely still open: artifact *versioning* specifically (chaining "this is a new revision of that prior file" — no signal for that exists yet, even now that FileBot can actually produce files), and any queueing/multi-tenancy work (explicitly deferred until there's a real second owner). |
 
 We are deliberately not building stages 5+ until 2–4 work end-to-end with
 real Discord messages, per the project's own "don't overcomplicate the
@@ -310,6 +310,7 @@ at a time:
     core stated purpose may not actually be wired up yet — that's a real
     finding, separate from Stage 7, worth checking before relying on
     FileBot for anything. Filed here rather than silently worked around.
+    **Fixed the same day** — see "FileBot fixed" further down.
   - **CodingBot** has no separate artifact concept — it edits this repo
     directly, and git already versions that.
   - Given one specialist's tool appears unbuilt and the other has no
@@ -334,6 +335,110 @@ other agent's model/delegation config was touched by any of this — only
 `registry/`, `agents/core/AGENTS.md` (new `/history`/`/retry` sections),
 and this README.
 
+### Security review (2026-08-20)
+
+A real system-wide audit, not a diff review — secrets handling, file
+permissions, network exposure, Discord bot permission scoping, and
+whether anything in the original 9router risk-acceptance had regressed.
+
+**Real finding, fixed**: `~/.9router/db/data.sqlite` — 9router's own
+credential store (the OAuth tokens/API keys backing the whole 3-tier
+fallback chain) — was **world-readable** (`644`). This is the most
+serious finding of the review: on a compromised or shared box, any local
+user could have read every provider credential 9router holds. Fixed
+(`chmod 600`), and closed durably rather than just patched once:
+`UMask=0077` added to `9router.service`, `openmt-registry.service`,
+`openmt-backup.service`, and `openclaw-gateway.service` (all four
+restarted live to apply it — verified all 7 Discord bots reconnected
+cleanly afterward, including a real CoreBot round-trip test post-restart).
+
+**Related findings, also fixed**: `registry/registry.sqlite` (job/usage
+data, including verbatim user request text) and every OpenClaw agent
+session `.jsonl` file under `~/.openclaw/agents/*/sessions/` (full
+conversation transcripts, 60 files) were also `644`. Fixed retroactively
+(one-time `chmod`) and durably: `registry/db.js`'s `openDb()` now
+self-heals permissions to `600` on every daemon start regardless of what
+created the file, and `backup.js` explicitly writes its DB snapshot at
+`600` rather than relying on inherited/umask-derived permissions. Lower
+severity than the 9router finding since this box currently has exactly
+one local user account, but fixed anyway — defense in depth is cheap here
+and the box's user population isn't a security boundary worth relying on.
+
+**Checked, no issues found:**
+- `openclaw.json` (real provider API keys, Discord bot tokens) was
+  already `600` — correct, no action needed.
+- No secrets in git history — scanned all commits for API-key-shaped
+  strings and Discord token patterns; only the intended
+  `${DISCORD_*_BOT_TOKEN}` env-var placeholders were found, never a real
+  value. `.gitignore` correctly excludes `.env*`, `secrets/`,
+  `*.local.json(5)`, `.openclaw/`, and `registry/*.sqlite*`.
+- Network exposure: only SSH (22) is bound to a public interface. The
+  OpenClaw gateway (18789) and 9router (20128) are both loopback-only —
+  confirmed via `ss -tlnp`, no regression from how they were set up.
+- 9router's dashboard still requires authentication (confirmed via a live
+  unauthenticated API probe returning `401`) — the password set back in
+  the 9router setup stage hasn't been reset or bypassed.
+- `codex-review`'s tool restriction (`tools.allow: ["read"]`, no write/
+  shell/delegation) is intact — re-verified directly against the live
+  config, not assumed from memory.
+- Discord bot OAuth2 scope, per `docs/02-discord-bots-setup.md`, is
+  already least-privilege by design: `Send Messages`, `Read Message
+  History`, `View Channels`, `Use Slash Commands` only — no admin/manage-
+  server permissions requested for any of the 7 bots. (This checks the
+  documented setup procedure; it doesn't re-verify the *live* Discord-side
+  grant for each bot, which would need Discord's own admin API.)
+- 9router's other previously-documented risks (TLS verification disabled
+  to upstream providers, reversible admin password storage, unsigned
+  auto-updates) are unchanged from the original risk acceptance
+  (2026-08-19) — this review didn't find anything new there, and no
+  world-readable CA key was found on this deployment (that specific
+  StationX finding doesn't appear to apply to how we're using it —
+  loopback-only, no local TLS interception in play).
+
+No code changes beyond `registry/db.js` and `registry/backup.js` (the two
+self-healing permission fixes) — everything else was file-permission and
+systemd-unit remediation on the live host, not a repo change.
+
+### FileBot fixed — it never had a way to actually generate a file (2026-08-20)
+
+The Stage 7 artifact-versioning investigation (above) surfaced a real bug:
+FileBot's core purpose — Word/Excel/PowerPoint creation — had **zero tool
+calls in any real session ever**. Root cause, confirmed against the
+installed OpenClaw tool catalog: there is no built-in document-generation
+tool. `image_generate`/`video_generate`/`music_generate` exist natively;
+nothing equivalent exists for office documents. FileBot's `AGENTS.md` had
+always described *what* it owned, never *how* to actually produce
+anything — so it had been silently unable to do its job since Stage 2.
+
+Fixed with the same shape as PictureBot's real capability, minus the
+native tool: three pure-JS libraries (`docx`, `exceljs`, `pptxgenjs` — no
+native compilation, verified) installed at `filebot-tools/` in this repo;
+`agents/file/TOOLS.md` (new) gives FileBot a concrete recipe — write a
+scratch script inside `filebot-tools/` so `require()` resolves, generate
+the file into `~/.openclaw/media/tool-document-generation/` (mirroring
+PictureBot's own media-dir convention), verify it's real before calling
+the job done, delete the scratch script, and reply with a `MEDIA:` line
+so OpenClaw actually attaches it to the Discord message. `AGENTS.md` gets
+a short pointer to it.
+
+**Verified live, two full round trips, no assistance**: asked FileBot for
+a real Word doc — it wrote the script, ran it, listed the output file to
+confirm it existed, deleted the scratch script, and replied with a
+correct `MEDIA:` line; the generated `.docx` parsed back as valid OOXML
+with the right text inside. Asked for an Excel file with a `SUM` formula
+specifically to test the trickiest Definition-of-Done requirement (live
+formulas, not precomputed values) — the generated cell held a real
+`{formula: "SUM(A1:A3)"}`, not a static `60`. Both deliveries confirmed
+`succeeded: true` with a real `mediaUrl` in the delivery payload, not
+just posted text.
+
+`npm audit` flags 4 DoS-class (infinite-loop-on-malformed-input)
+vulnerabilities in transitive deps (`image-size` via `pptxgenjs`, `uuid`
+via `exceljs`) — accepted rather than force breaking downgrades, since
+this only ever parses content FileBot itself generates or the owner
+explicitly supplies, never arbitrary untrusted input, and nothing here is
+network-exposed.
+
 ## Repo layout
 
 ```
@@ -355,14 +460,17 @@ docs/
   03-provider-api-keys.md         get OpenAI / Anthropic / Google API keys
   04-cost-and-token-discipline.md deterministic-vs-model rules that keep API spend down
 registry/                         Stages 5-7: Work Registry daemon, MCP /usage tool, backups — see registry/README.md
+filebot-tools/                    Node libraries (docx/exceljs/pptxgenjs) backing FileBot's actual document generation — see agents/file/TOOLS.md
 ```
 
-Each `agents/<id>/` folder holds the two files OpenClaw reads to build that
-agent's identity: `SOUL.md` (who it is, its persona) and `AGENTS.md` (its
+Each `agents/<id>/` folder holds the files OpenClaw reads to build that
+agent's identity: `SOUL.md` (who it is, its persona), `AGENTS.md` (its
 operating rules — what it owns, what it must never silently take on, and
-its delegation rights). These get copied into
-`~/.openclaw/workspace/<id>/` on the server during setup (confirmed live —
-not `agents/<id>/workspace/` as earlier drafts of this README assumed).
+its delegation rights), and, where an agent needs one, `TOOLS.md` (concrete
+"how" instructions for something OpenClaw has no native tool for — so far
+just FileBot). These get copied into `~/.openclaw/workspace/<id>/` on the
+server during setup (confirmed live — not `agents/<id>/workspace/` as
+earlier drafts of this README assumed).
 
 ## What to do next (you)
 

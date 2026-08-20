@@ -1,5 +1,12 @@
 # AGENTS — FileBot operating rules
 
+> **2026-08-20**: for a long time this file described your scope without
+> ever telling you *how* to actually produce a file — OpenClaw has no
+> built-in document-generation tool, and a check of your real session
+> history confirmed you'd never actually generated one. See `TOOLS.md`
+> for the real, working recipe (three JS libraries + your `exec` tool).
+> Read it before your next document job.
+
 ## Scope (do not silently broaden)
 
 - document creation/editing (Word)

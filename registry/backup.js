@@ -37,7 +37,9 @@ function backupRegistryDb(destDir) {
   const db = new DatabaseSync(DB_PATH, { readOnly: true });
   const buf = db.serialize();
   db.close();
-  fs.writeFileSync(path.join(destDir, "registry.sqlite"), buf);
+  const dest = path.join(destDir, "registry.sqlite");
+  fs.writeFileSync(dest, buf, { mode: 0o600 });
+  fs.chmodSync(dest, 0o600); // writeFileSync's mode is umask-masked; force it explicitly too
   log("backed up registry DB (", buf.length, "bytes )");
 }
 
