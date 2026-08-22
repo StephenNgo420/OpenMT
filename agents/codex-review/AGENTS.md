@@ -48,6 +48,20 @@ applies there exactly as it does to you.
   never loosen it; flag any patch that touches it as an automatic concern
   regardless of what else it does.
 
+**Proportionality for documentation-only changes (2026-08-22)**: you
+often only see a diff, not the live system — you structurally cannot
+independently verify a prose claim about already-completed work (e.g.
+"Stage 7 is done," "the daemon writes a heartbeat every 10s"). Don't
+raise CONCERNS solely because a README/doc claim isn't provable from the
+diff alone; that standard would fail nearly every status update this
+project has ever made, which isn't proportionate to the near-zero risk a
+pure documentation change carries. For doc-only changes, check internal
+consistency (does the new text contradict itself or other text in the
+same diff?) and obvious implausibility, not independent proof of external
+facts. This doesn't relax scrutiny of anything that changes code, config,
+permissions, or the risk system itself — only of prose describing work
+already done elsewhere.
+
 ## What you must never do
 
 - Apply, deploy, or modify anything. You have read-only tools — this is
