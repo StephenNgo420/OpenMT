@@ -1,0 +1,46 @@
+name: Codex review (pre-merge gate)
+
+# pull_request_target, deliberately, not pull_request: for a same-repo PR
+# (which is what Claude Code always opens here, never a fork), the plain
+# `pull_request` trigger runs the workflow AND this job's script from the
+# PR's own head branch, with full secret access — meaning the very PR
+# being reviewed could edit codex_review_ci.py to fake a pass and exfiltrate
+# OPENAI_API_KEY/GITHUB_TOKEN in the process. `pull_request_target` checks
+# out the BASE branch by default (see the checkout step below, which does
+# NOT override `ref`), so the workflow, the review script, and the review
+# criteria it reads are always the already-merged, trusted version — never
+# something the PR under review can modify. The PR's own content is only
+# ever read as inert diff text (fetched separately, never executed) — see
+# codex_review_ci.py's docstring for the same point from the script side.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    name: review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # No `ref:` override — defaults to the base branch for
+        # pull_request_target. This is the load-bearing line: it's what
+        # makes the workflow/script/criteria trusted-base-pinned.
+        with:
+          fetch-depth: 0
+
+      - name: Fetch PR head (diff data only — never executed as code)
+        run: git fetch origin "pull/${{ github.event.pull_request.number }}/head:pr-head"
+
+      - name: Independent review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-5.4
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: pr-head
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/codex_review_ci.py

@@ -12,6 +12,8 @@ secrets/
 # OS / editor noise
 .DS_Store
 node_modules/
+__pycache__/
+*.pyc
 
 # Work Registry runtime data — never committed (job/usage records are
 # operational data, not source)

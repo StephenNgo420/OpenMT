@@ -439,9 +439,197 @@ this only ever parses content FileBot itself generates or the owner
 explicitly supplies, never arbitrary untrusted input, and nothing here is
 network-exposed.
 
+### Codex reviews Claude Code's own server-side work before it's presented as a commit candidate (2026-08-22)
+
+This is a different gate from "Independent Codex review gate for
+CodingBot self-change" above: that one covers CodingBot working *inside*
+the agent framework. This one covers *this Claude Code session*, working
+directly on the server outside OpenClaw entirely — every registry/agent-
+config/README change made all session up to now had zero independent
+review before this.
+
+**Mechanism**: a Claude Code `Stop` hook
+(`.claude/hooks/codex-review-stop.py`, wired via `.claude/settings.json`,
+project-scoped so it only loads for OpenMT sessions — confirmed it takes
+effect immediately within the same session once `settings.json` exists,
+not just on the next session start). Every time Claude Code is about to
+finish a turn, the hook checks for an uncommitted git diff (tracked +
+untracked, best-effort redacted for common secret-shaped patterns) and —
+if one exists and hasn't already gotten a clean verdict — sends it to the
+same `codex-review` agent the CodingBot gate uses, via a direct
+`openclaw agent --agent codex-review` CLI call (no `sessions_spawn`
+involved, since this session isn't an OpenClaw agent). `codex-review`'s
+own `AGENTS.md` was updated to formally acknowledge this as its second
+legitimate caller (previously it only knew about CodingBot) and to fix an
+internal inconsistency in its verdict-format example that this build
+surfaced. It reuses that native `VERDICT: APPROVE` / `VERDICT: CONCERNS`
+format rather than inventing a parallel one — the hook's own parser is
+deliberately asymmetric: an APPROVE only counts if it's the sole, exact,
+final line of the reply (nothing looser can let a diff through), while a
+CONCERNS verdict is recognized anywhere it appears as a standalone line
+(so it can't be misreported as "no verdict found").
+
+**"Before commit" is enforced by a standing rule, not by this hook
+alone.** A `Stop` hook fires when Claude Code finishes a turn — it has no
+way to intercept `git commit` itself. What actually makes this work
+before commit is that Claude Code never runs `git commit` without first
+asking the owner in a separate turn (see the top-level operating rules,
+and every commit in this project's own history), so the diff a
+Stop-hook-review sees is, in practice, always the same diff that would
+otherwise be presented as a commit candidate. This is a real, but
+process-level, guarantee — not something the hook enforces by itself.
+
+**Loop safety**: Claude Code's `stop_hook_active` field means the hook
+only ever forces one extra turn — if Codex flags concerns, the hook
+blocks once (exit 2, Codex's reasoning fed back as the reason to keep
+working), and the very next Stop is always allowed through regardless of
+outcome. This bounds the mechanism to "one forced look," never a hang.
+
+**What's deliberately NOT solved, and why**: this is a due-diligence /
+self-check mechanism, not a cryptographic security boundary. These
+limitations were found (and accepted) via roughly a dozen rounds of live
+testing against the actual, real uncommitted diff during this build —
+including the hook firing for real, unprompted, mid-build and flagging
+several of the items below itself:
+- **Advisory, not enforced.** After the one forced round, an unresolved
+  CONCERNS verdict doesn't block the commit outright — it trusts Claude
+  Code to actually address or explain it, the same trust-based pattern
+  `agents/coding/AGENTS.md` already uses for CodingBot ("surface both
+  views to the owner" is also just an instruction, not code-enforced).
+- **No privilege separation — addressed by a second layer, see below.**
+  The approval-cache file (`.claude/codex-review-state.local.json`,
+  gitignored, chmod 600, written via atomic temp-file-then-rename) is
+  writable by the very session being reviewed. A well-behaved Claude Code
+  session can't skip the hook (the harness runs it unconditionally,
+  independent of the LLM's intent) — but nothing stops a misbehaving one
+  from hand-editing the cache or the hook script itself in a separate
+  turn. Worse, discovered while planning the fix: hardening the hook
+  *file* wouldn't even be enough on its own, since git itself gives the
+  repo owner ways around any client-side hook regardless of that hook's
+  own permissions (`git commit --no-verify`, or repointing
+  `core.hooksPath` — both controlled by the same account being reviewed).
+  This is a structural limit of client-side git hooks, not a bug in this
+  one — see "Codex reviews Claude Code's own work a second time, on
+  GitHub's infrastructure" below for the actual fix.
+- **Redaction is best-effort, not a guarantee.** The secret-pattern list
+  (AWS keys, `sk-`/`gh*_`/`xox*-` tokens, PEM blocks, JWTs, generic
+  `key=value` assignments) catches common, recognizable forms — it does
+  not catch arbitrary bearer tokens, connection strings, cookies, or
+  high-entropy values under an unrecognized name. Don't rely on it as the
+  reason a real secret is safe to let sit in the working tree.
+- **Diff content is prompt-injection-capable.** Repository text (including
+  a newly added file's contents) goes into the reviewer's prompt.
+  Delimited with explicit BEGIN/END markers and an instruction to treat
+  it as untrusted data, not commands — which helps, but doesn't
+  guarantee — a persuasive enough embedded instruction could still
+  influence the verdict. Treat an APPROVE as a second opinion worth
+  having, not as a warrant.
+
+**What IS solved**: content identity for the dedup cache is computed from
+raw byte + mode-bit hashes for untracked files (not lossy text previews),
+combined with the tracked diff, each hashed independently before
+combining (no naive-concatenation collision risk), bound to the HEAD
+commit and a policy version so a stale approval can't coast through after
+the base changes; tracked binary diffs, oversized/unreadable/symlinked
+untracked files, and anything Codex didn't fully see are never eligible
+for a cached clean verdict; infra failures (openclaw unreachable, timeout,
+malformed JSON, no recognizable verdict line, even malformed hook input)
+block once with an explicit "this was not reviewed" message instead of
+silently passing as clean. One residual, accepted gap: the *tracked* side
+of the identity comes from `git diff`'s text output (decoded with
+replacement for invalid bytes, not exact raw bytes) — a real exact-bytes
+hash would mean re-plumbing the tracked-diff path to operate on bytes
+throughout, which wasn't judged worth it for how unlikely non-UTF-8
+tracked pathnames/content are in this repo in practice.
+
+### Codex reviews Claude Code's own work a second time, on GitHub's infrastructure (2026-08-22)
+
+The Stop hook above is a due-diligence self-check — useful, but not a
+real security boundary, because Claude Code both runs it and has full
+filesystem access to everything it depends on. This second layer closes
+that gap the right way: by moving enforcement somewhere Claude Code has
+no write access at all — GitHub's own servers.
+
+**How it works**:
+- `.github/workflows/codex-review.yml` — a GitHub Actions check that runs
+  on every pull request into `claude/openclaw-telegram-ai-company-2a38q1`.
+- **Triggers on `pull_request_target`, not `pull_request` — this is the
+  detail the whole layer's integrity depends on.** For a same-repo PR
+  (which is what Claude Code always opens here, never a fork), plain
+  `pull_request` runs the workflow *and* this job's script from the PR's
+  own head branch, with full secret access — meaning the very PR under
+  review could edit `codex_review_ci.py` to fake a pass and get
+  `OPENAI_API_KEY`/`GITHUB_TOKEN` handed to it in the process (a same-repo
+  PR doesn't get the fork-safety secret restrictions GitHub applies to
+  external contributors). `pull_request_target` checks out the *base*
+  branch by default, so the workflow, the script, and the review criteria
+  it reads (`agents/codex-review/AGENTS.md`) are always the already-merged,
+  trusted version — a PR can't weaken its own review, even one (like the
+  PR that first introduced this feature) that edits those very files.
+  Found and fixed live, the same way everything else in this section
+  was: the local Stop hook reviewed this design before commit and caught
+  that the first draft used plain `pull_request`.
+- `.github/scripts/codex_review_ci.py` — fetches the PR head as a plain
+  git ref (`git fetch origin pull/<N>/head`) purely to compute the diff
+  as text; that content is never checked out as the working tree, never
+  executed, never sourced — only read as inert data, same as the local
+  hook treats an uncommitted diff. Redacts (same patterns as the local
+  hook, deliberately duplicated rather than shared so this script has
+  zero dependency on anything VPS-specific) and size-caps that diff text,
+  then calls the OpenAI API **directly**, with its own dedicated key
+  stored as a GitHub Actions secret (`OPENAI_API_KEY`) — not anything
+  from the VPS, not routed through 9router/`codex-review`-the-agent, and
+  not reachable by anything running on the OpenMT server.
+- A branch protection rule on `claude/openclaw-telegram-ai-company-2a38q1`
+  requires that check to pass, requires branches to be up to date before
+  merging, and requires all changes to go through a pull request — no
+  more direct pushes. This is the piece that actually closes the gap: a
+  required check on a protected branch is enforced by GitHub's servers,
+  not by anything in the local repo, so `git commit --no-verify` and
+  `core.hooksPath` tricks (the exact bypasses that make a local git hook
+  insufficient on its own) don't apply to it at all — and combined with
+  `pull_request_target` above, the check itself can't be neutered from
+  inside the PR either.
+- Auto-merge is enabled on the repo, so once the check passes a PR merges
+  on its own — the owner's real approval already happened in chat before
+  Claude Code opened the PR; this backstop verifies nothing slipped
+  between that approval and what actually lands, it isn't a second manual
+  approval step.
+
+**Deliberately stricter than the local hook in one respect**: the local
+Stop hook fails *open* on infra trouble (openclaw unreachable, timeout,
+etc.) because blocking an entire Claude Code session over a transient
+hiccup would be too disruptive to be worth it. This CI check fails
+*closed* on any error — bad API response, network failure, no parseable
+verdict — because it exists specifically to be the hard gate; an
+incomplete review must never be silently treated as a pass here.
+
+**Bootstrap sequence, since this creates a chicken-and-egg problem**:
+branch protection can't require a check that has never run, and the
+check can't run until its workflow file exists on the branch — so the
+commit that introduces this feature (this one) is necessarily the *last*
+direct push to `claude/openclaw-telegram-ai-company-2a38q1`. After it
+lands: open one small PR to let the check run once and register its name
+with GitHub, configure branch protection referencing that name, enable
+auto-merge, and every change from that point on (including any further
+work on this very feature) goes through the new PR flow.
+
+**What this does and doesn't cover**: only protects what actually reaches
+this GitHub repo's protected branch — it has no opinion on local,
+never-pushed state. It also doesn't remove the need for the owner's
+chat-level approval before Claude Code opens a PR in the first place;
+that approval is still the real decision, this is verification that what
+merges matches what was approved.
+
 ## Repo layout
 
 ```
+.claude/
+  settings.json    Stop-hook wiring for the Codex pre-commit review below (project-scoped)
+  hooks/codex-review-stop.py   the hook itself
+.github/
+  workflows/codex-review.yml       required PR check — second, server-side review layer
+  scripts/codex_review_ci.py       what that check actually runs
 config/
   openclaw.config.template.json5   agent + model + Discord roster (template — no real secrets)
 agents/
