@@ -604,15 +604,25 @@ hiccup would be too disruptive to be worth it. This CI check fails
 verdict — because it exists specifically to be the hard gate; an
 incomplete review must never be silently treated as a pass here.
 
-**Bootstrap sequence, since this creates a chicken-and-egg problem**:
-branch protection can't require a check that has never run, and the
-check can't run until its workflow file exists on the branch — so the
-commit that introduces this feature (this one) is necessarily the *last*
-direct push to `claude/openclaw-telegram-ai-company-2a38q1`. After it
-lands: open one small PR to let the check run once and register its name
-with GitHub, configure branch protection referencing that name, enable
-auto-merge, and every change from that point on (including any further
-work on this very feature) goes through the new PR flow.
+**Bootstrapped and fully live (2026-08-22)**: this had a chicken-and-egg
+problem — branch protection can't require a check that has never run, and
+the check can't run until its workflow file exists on the branch. Solved
+by making the commit that introduced this feature the *last* direct push
+to `claude/openclaw-telegram-ai-company-2a38q1`, then one small PR
+([#1](https://github.com/StephenNgo420/OpenMT/pull/1)) to let the check
+run for real (it did — and correctly caught a genuine bug in its own
+first two runs, see the git history on that PR), register its name
+(`review`) with GitHub, and merge. Branch protection now requires that
+check, requires PRs (0 approvals needed — the owner's real approval
+already happened in chat before Claude Code opens a PR), requires
+branches to be up to date, and blocks force-push/deletion, with
+`enforce_admins` on so there's no owner-account exception either. Verified
+live with a real rejected push: `git push` straight to the branch was
+bounced by GitHub with "Changes must be made through a pull request" /
+"Required status check 'review' is expected" — not just configured,
+actually confirmed to bite. Auto-merge and delete-branch-on-merge are
+both enabled on the repo. Every change from here on, including any
+further work on this very feature, goes through the PR flow.
 
 **What this does and doesn't cover**: only protects what actually reaches
 this GitHub repo's protected branch — it has no opinion on local,
@@ -665,10 +675,11 @@ earlier drafts of this README assumed).
 Nothing blocked on you right now. As of 2026-08-22: all 7 agents are live
 on the 9router fallback layer, Stage 5-7 (Work Registry, `/usage`, job
 state machine, crash recovery, backups) is done, FileBot can actually
-generate files, and Claude Code's own server-side work goes through a
-local Codex due-diligence check before every commit candidate (see the
-Codex-review sections above). A second, server-side layer — a required
-GitHub Actions check plus branch protection — is mid-rollout: this very
-PR is the bootstrap step that lets that check register with GitHub before
-branch protection can require it. Once that's configured, changes land
-via pull request + required check + auto-merge instead of direct pushes.
+generate files, and Claude Code's own server-side work goes through two
+independent Codex review layers before it reaches this branch — a local
+due-diligence check on every commit candidate, and a required,
+server-side GitHub Actions check enforced by branch protection that a
+misbehaving local session can't route around (see the Codex-review
+sections above for both). Changes now land via pull request + required
+check + auto-merge instead of direct pushes — confirmed live, including a
+real rejected direct push.
