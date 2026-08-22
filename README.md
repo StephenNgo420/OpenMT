@@ -665,8 +665,10 @@ earlier drafts of this README assumed).
 Nothing blocked on you right now. As of 2026-08-22: all 7 agents are live
 on the 9router fallback layer, Stage 5-7 (Work Registry, `/usage`, job
 state machine, crash recovery, backups) is done, FileBot can actually
-generate files, and Claude Code's own server-side work now goes through
-two independent Codex review layers before it reaches this branch (see
-"Codex reviews Claude Code's own server-side work" and the section right
-after it, above). From this point on, changes land via pull request +
-required check + auto-merge rather than direct pushes.
+generate files, and Claude Code's own server-side work goes through a
+local Codex due-diligence check before every commit candidate (see the
+Codex-review sections above). A second, server-side layer — a required
+GitHub Actions check plus branch protection — is mid-rollout: this very
+PR is the bootstrap step that lets that check register with GitHub before
+branch protection can require it. Once that's configured, changes land
+via pull request + required check + auto-merge instead of direct pushes.
